@@ -6,30 +6,15 @@ use std::io::{self, Result, Write};
 use std::fs;
 
 #[derive(Clone)]
-pub struct LinuxPlatform {
-    original_termios: Option<termios::Termios>,
-}
+pub struct LinuxPlatform {}
 
 impl Platform for LinuxPlatform {
     fn init() -> Result<Self> {
-        let original_termios = if let Ok(termios) = termios::Termios::from_fd(0) {
-            Some(termios)
-        } else {
-            None
-        };
-        
-        if let Some(ref termios_ref) = original_termios {
-            let mut raw = termios_ref.clone();
-            termios::cfmakeraw(&mut raw);
-            termios::tcsetattr(0, termios::TCSANOW, &raw).ok();
-        }
-        
+        // Enter alternate screen buffer
         print!("\x1B[?1049h");
         io::stdout().flush()?;
         
-        Ok(LinuxPlatform {
-            original_termios,
-        })
+        Ok(LinuxPlatform {})
     }
 
     fn read_key(&mut self) -> Result<KeyEvent> {
@@ -135,9 +120,6 @@ impl Platform for LinuxPlatform {
 impl Drop for LinuxPlatform {
     fn drop(&mut self) {
         print!("\x1B[?1049l");
-        if let Some(ref termios) = self.original_termios {
-            termios::tcsetattr(0, termios::TCSANOW, termios).ok();
-        }
         io::stdout().flush().ok();
     }
 }

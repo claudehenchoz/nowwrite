@@ -3,17 +3,27 @@ name = "nowwrite"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "nowwrite"
+path = "src/main.rs"
+required-features = ["linux"]
+
+[[bin]]
+name = "nowwrite_uefi"
+path = "src/uefi_main.rs"
+required-features = ["uefi"]
+
 [dependencies]
-uefi = { version = "0.27", features = ["alloc"], optional = true }
-uefi-services = { version = "0.24", optional = true }
-termios = { version = "0.3", optional = true }
-terminal_size = { version = "0.3", optional = true }
+uefi = { version = "0.23", features = ["alloc"], optional = true, default-features = false }
+uefi-services = { version = "0.20", optional = true, default-features = false }
+libc = { version = "0.2", optional = true }
+terminal_size = { version = "0.4", optional = true }
 chrono = "0.4"
 
 [features]
 default = ["linux"]
 uefi = ["dep:uefi", "dep:uefi-services"]
-linux = ["dep:termios", "dep:terminal_size"]
+linux = ["dep:libc", "dep:terminal_size"]
 
 [profile.release]
 opt-level = "z"

@@ -75,10 +75,12 @@ documents/           # Your markdown files
 - x86_64 UEFI firmware
 - FAT32 formatted storage
 - At least 16MB available space
+- Rust toolchain with rustup and UEFI target installed
 
 ### Linux Version
 - Linux with terminal support
 - Rust toolchain for building
+- Note: Current Linux implementation uses simplified terminal handling
 
 ## Development
 

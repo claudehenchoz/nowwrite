@@ -1,0 +1,21 @@
+[package]
+name = "nowwrite"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+uefi = { version = "0.27", features = ["alloc"], optional = true }
+uefi-services = { version = "0.24", optional = true }
+termios = { version = "0.3", optional = true }
+terminal_size = { version = "0.3", optional = true }
+chrono = "0.4"
+
+[features]
+default = ["linux"]
+uefi = ["dep:uefi", "dep:uefi-services"]
+linux = ["dep:termios", "dep:terminal_size"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1

@@ -1,26 +1,16 @@
-mod editor;
-mod ui;
-mod file;
-mod platform;
-mod config;
+use nowwrite::platform::terminal::TerminalPlatform;
+use nowwrite::platform::Platform;
+use std::process::ExitCode;
 
-use std::io::Result;
-
-#[cfg(feature = "linux")]
-use platform::linux::LinuxPlatform;
-#[cfg(feature = "uefi")]
-use platform::uefi::UefiPlatform;
-
-use platform::Platform;
-use editor::Editor;
-
-fn main() -> Result<()> {
-    #[cfg(feature = "linux")]
-    let platform = LinuxPlatform::init()?;
-    
-    #[cfg(feature = "uefi")]
-    let platform = UefiPlatform::init()?;
-    
-    let mut editor = Editor::new(platform)?;
-    editor.run()
+fn main() -> ExitCode {
+    // `run` consumes the platform, so the terminal is restored before any
+    // error is printed.
+    let result = TerminalPlatform::init().and_then(|(platform, backend)| nowwrite::run(platform, backend));
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("nowwrite: {err}");
+            ExitCode::FAILURE
+        }
+    }
 }

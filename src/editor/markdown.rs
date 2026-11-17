@@ -1,3 +1,6 @@
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MarkdownToken {
     Heading { level: u8, text: String },
@@ -80,7 +83,7 @@ impl MarkdownLine {
         Self { tokens }
     }
 
-    fn parse_until<I>(chars: &mut std::iter::Peekable<I>, delimiter: &str) -> String
+    fn parse_until<I>(chars: &mut core::iter::Peekable<I>, delimiter: &str) -> String
     where
         I: Iterator<Item = char>,
     {
@@ -108,6 +111,59 @@ impl MarkdownLine {
         }
         text
     }
+}
+
+/// How a span of source text should be highlighted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpanKind {
+    Plain,
+    Heading,
+    Bold,
+    Italic,
+}
+
+/// Split `line` into highlighted spans **including** the markdown markers,
+/// so the concatenated spans equal the input and screen columns match
+/// cursor columns. Unclosed markers are left as plain text.
+pub fn highlight(line: &str) -> Vec<(SpanKind, &str)> {
+    if MarkdownParser::get_heading_level(line).is_some() {
+        return alloc::vec![(SpanKind::Heading, line)];
+    }
+
+    let mut spans = Vec::new();
+    let mut plain_start = 0;
+    let mut i = 0;
+    while i < line.len() {
+        let rest = &line[i..];
+        let (marker, kind) = if rest.starts_with("**") {
+            ("**", SpanKind::Bold)
+        } else if rest.starts_with('*') {
+            ("*", SpanKind::Italic)
+        } else if rest.starts_with('_') {
+            ("_", SpanKind::Italic)
+        } else {
+            i += rest.chars().next().map_or(1, char::len_utf8);
+            continue;
+        };
+
+        let body = &rest[marker.len()..];
+        match body.find(marker) {
+            Some(close) if close > 0 => {
+                if plain_start < i {
+                    spans.push((SpanKind::Plain, &line[plain_start..i]));
+                }
+                let end = i + marker.len() * 2 + close;
+                spans.push((kind, &line[i..end]));
+                i = end;
+                plain_start = end;
+            }
+            _ => i += marker.len(),
+        }
+    }
+    if plain_start < line.len() || spans.is_empty() {
+        spans.push((SpanKind::Plain, &line[plain_start..]));
+    }
+    spans
 }
 
 pub struct MarkdownParser;
@@ -168,5 +224,16 @@ mod tests {
         assert!(matches!(line.tokens[0], MarkdownToken::PlainText(_)));
         assert!(matches!(line.tokens[1], MarkdownToken::Italic(_)));
         assert!(matches!(line.tokens[2], MarkdownToken::PlainText(_)));
+    }
+
+    #[test]
+    fn highlight_keeps_markers() {
+        let line = "a **bold** and *it* plus *open é";
+        let spans = highlight(line);
+        let joined: String = spans.iter().map(|(_, t)| *t).collect();
+        assert_eq!(joined, line);
+        assert!(spans.contains(&(SpanKind::Bold, "**bold**")));
+        assert!(spans.contains(&(SpanKind::Italic, "*it*")));
+        assert_eq!(highlight("## Title"), [(SpanKind::Heading, "## Title")]);
     }
 }

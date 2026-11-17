@@ -1,108 +1,47 @@
-use crate::platform::{Platform, TextAttribute, Color};
 use crate::editor::buffer::TextBuffer;
-use std::io::Result;
+use crate::file::file_name;
+use crate::platform::BatteryStatus;
+use alloc::format;
+use alloc::string::String;
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::text::Line;
+use ratatui::widgets::Paragraph;
+use ratatui::Frame;
 
-pub struct StatusBar;
+/// Bottom row: file name, counts and saved state on the left; a transient
+/// message, cursor position and battery on the right.
+pub fn render(
+    frame: &mut Frame,
+    area: Rect,
+    buffer: &TextBuffer,
+    battery: Option<BatteryStatus>,
+    message: Option<&str>,
+) {
+    let name = buffer.file_path().map_or("untitled.md", file_name);
+    let modified = if buffer.is_modified() { " *" } else { "" };
+    let left = format!(
+        " {name}{modified} | {} words | {} chars",
+        buffer.word_count(),
+        buffer.char_count()
+    );
 
-impl StatusBar {
-    pub fn render<P: Platform>(
-        platform: &mut P,
-        buffer: &TextBuffer,
-        width: usize,
-        y: usize,
-    ) -> Result<()> {
-        let filename = buffer.file_path()
-            .map(|p| {
-                std::path::Path::new(p)
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string()
-            })
-            .unwrap_or_else(|| "untitled.md".to_string());
-        
-        let word_count = Self::count_words(buffer);
-        let char_count = buffer.to_string().len();
-        let modified = if buffer.is_modified() { "●" } else { "" };
-        
-        let cursor = buffer.cursor();
-        let position_info = format!("{}:{}", cursor.line + 1, cursor.column + 1);
-        
-        let left_info = format!(" {} | {} words | {} chars {}", 
-                              filename, word_count, char_count, modified);
-        
-        let right_info = format!("{} ", position_info);
-        
-        let available_width = width.saturating_sub(left_info.len()).saturating_sub(right_info.len());
-        
-        for (i, ch) in left_info.chars().enumerate() {
-            if i < width {
-                platform.draw_char(i, y, ch, TextAttribute {
-                    bright: false,
-                    background: Color::Grey,
-                })?;
-            }
-        }
-        
-        for i in left_info.len()..(left_info.len() + available_width) {
-            if i < width {
-                platform.draw_char(i, y, ' ', TextAttribute {
-                    bright: false,
-                    background: Color::Grey,
-                })?;
-            }
-        }
-        
-        let right_start = width.saturating_sub(right_info.len());
-        for (i, ch) in right_info.chars().enumerate() {
-            let pos = right_start + i;
-            if pos < width {
-                platform.draw_char(pos, y, ch, TextAttribute {
-                    bright: false,
-                    background: Color::Grey,
-                })?;
-            }
-        }
-        
-        Ok(())
+    let cursor = buffer.cursor();
+    let mut right = String::new();
+    if let Some(message) = message {
+        right.push_str(message);
+        right.push_str(" | ");
     }
-
-    fn count_words(buffer: &TextBuffer) -> usize {
-        buffer.to_string()
-            .split_whitespace()
-            .filter(|word| !word.is_empty())
-            .count()
+    right.push_str(&format!("{}:{}", cursor.line + 1, cursor.column + 1));
+    if let Some(b) = battery {
+        right.push_str(&format!(" | {}%{}", b.level, if b.charging { "+" } else { "" }));
     }
+    right.push(' ');
 
-    pub fn render_help<P: Platform>(
-        platform: &mut P,
-        width: usize,
-        y: usize,
-        help_text: &str,
-    ) -> Result<()> {
-        let centered_x = if help_text.len() < width {
-            (width - help_text.len()) / 2
-        } else {
-            0
-        };
-        
-        for i in 0..width {
-            platform.draw_char(i, y, ' ', TextAttribute {
-                bright: false,
-                background: Color::Grey,
-            })?;
-        }
-        
-        for (i, ch) in help_text.chars().enumerate() {
-            let pos = centered_x + i;
-            if pos < width {
-                platform.draw_char(pos, y, ch, TextAttribute {
-                    bright: true,
-                    background: Color::Grey,
-                })?;
-            }
-        }
-        
-        Ok(())
-    }
+    let right_width = right.chars().count() as u16;
+    let [left_area, right_area] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(right_width)]).areas(area);
+
+    let bar = super::bar();
+    frame.render_widget(Paragraph::new(Line::from(left)).style(bar), left_area);
+    frame.render_widget(Paragraph::new(Line::from(right)).style(bar), right_area);
 }

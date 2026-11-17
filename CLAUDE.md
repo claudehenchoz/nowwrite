@@ -4,54 +4,74 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-NowWrite is a distraction-free, text-mode Markdown editor in Rust. The primary target is a standalone UEFI application booted from a FAT32 USB drive (no OS); a Linux terminal build exists for developing and tweaking the UI. The original requirements live in `docs/PROMPT.md`, and the intended design (module layout, UI mockups, power management, boot process) is in `docs/nowwrite-design-doc.md`. Check both before adding features.
+NowWrite is a distraction-free, text-mode Markdown editor in Rust. The primary target is a standalone UEFI application booted from a FAT32 USB drive (no OS). A terminal build (Linux/macOS/Windows) runs the same editor for development. The original requirements live in `docs/PROMPT.md`, and the intended design is in `docs/nowwrite-design-doc.md`. Check both before adding features. The design doc predates the ratatui/`no_std` rewrite, so its module layout is out of date.
 
 ## Commands
 
-The Linux/UEFI build scripts are bash (run from Git Bash/WSL or call `cargo` directly); the Windows script is PowerShell.
-
 ```bash
-# Linux/dev build (default feature = "linux") -> output/nowwrite-linux
-./scripts/build-linux.sh
-cargo build --features linux
+# Terminal build (default feature "terminal") - works on Windows, Linux, macOS
+cargo run
+./scripts/build-terminal.sh         # -> output/nowwrite      (PowerShell: scripts/build-terminal.ps1)
 
-# Windows/dev build -> output/nowwrite-windows.exe (run in a real console, e.g. Windows Terminal)
-./scripts/build-windows.ps1
-cargo run --no-default-features --features windows --bin nowwrite_windows
-
-# UEFI build -> output/NowWrite.efi (add --create-boot for output/boot/EFI/BOOT/BOOTX64.EFI)
-./scripts/build-uefi.sh
+# UEFI build -> output/NowWrite.efi; --create-boot / -CreateBoot adds output/boot/EFI/BOOT/BOOTX64.EFI
+./scripts/build-uefi.sh --create-boot   # PowerShell: scripts/build-uefi.ps1 -CreateBoot
 cargo build --release --bin nowwrite_uefi --target x86_64-unknown-uefi --no-default-features --features uefi
 
-# Tests (unit tests in src/editor/markdown.rs and src/config/keyboard.rs)
+# Boot in QEMU from a writable disk image synced with output/drive/ (needs output/NowWrite.efi + Python 3)
+./scripts/run-qemu.ps1
+
+# Tests
 cargo test
-cargo test markdown            # filter by module/test name
-cargo test editor::markdown::tests::<name>
+cargo test buffer                   # filter by module/test name
+cargo test editor::buffer::tests::undo_redo_roundtrip
+
+# Prove the core still builds without std (no platform feature)
+cargo check --lib --no-default-features
 
 # Write the bootable USB (formats the device, so never run it without explicit user approval)
 sudo ./scripts/create-boot-drive.sh /dev/sdX NOWWRITE
 ```
 
-The `linux`, `windows` and `uefi` features are mutually exclusive. Always pass `--no-default-features` when enabling `windows` or `uefi`. Each binary is gated by `required-features`: `nowwrite` (`src/main.rs`) needs `linux`, `nowwrite_windows` (`src/windows_main.rs`) needs `windows`, and `nowwrite_uefi` (`src/uefi_main.rs`) needs `uefi`. `cargo test` uses the default `linux` feature, which also compiles on Windows.
+The `terminal` and `uefi` features are mutually exclusive. Enabling both fails with a duplicate `panic_impl`. Binaries: `nowwrite` (`src/main.rs`, needs `terminal`) and `nowwrite_uefi` (`src/uefi_main.rs`, needs `uefi`). Before finishing a change, build both and run the `--no-default-features` check.
 
 ## Architecture
 
-All editor logic is generic over the `Platform` trait in `src/platform/mod.rs`. The trait covers key input (`KeyEvent`), char-cell drawing with `TextAttribute` (bright/grey background), file I/O, battery status, and power mode. Platform-specific code should stay behind this trait.
+The crate is a library (`src/lib.rs`) plus two thin binaries. **The library is `no_std` + `alloc`.** Core code must use `alloc::`/`core::` types and the crate's `Error`/`Result` (`src/error.rs`), never `std::`. Only `platform/terminal.rs` may use `std`, behind `feature = "terminal"`. Tests get `std` through `cfg(test)`.
 
-- `editor::Editor<P: Platform + Clone>` (`src/editor/mod.rs`) owns the main loop: backup check, render, read key, keyboard-layout remap, dispatch. It **clones the platform value** into each subsystem (`Renderer`, `FileManager`, `BackupManager`, `KeyboardConfig`), so platform implementations have to be cheap, shareable handles. `LinuxPlatform` is an empty struct, and any UEFI handle state has to survive cloning the same way.
-- `editor::buffer::TextBuffer` stores `Vec<String>` lines, the cursor and selection, the modified flag, and undo/redo. `editor::markdown` parses lines into highlight spans (headings, `*italic*`, `**bold**`), which `ui::renderer` draws as bright text.
-- `ui/` contains the renderer, the bottom status bar (filename, word/char counts, saved indicator, battery), and the modals (`FileModal` for `.md` file selection/creation, `KeyboardModal`), which return `ModalResult`.
-- `file/` has `FileManager` for load/save and `BackupManager`, which writes timestamped copies (`<name>.YYYYMMDD_HHMMSS.bak`) into `.nowwrite/` every 5 minutes and before each Ctrl+S save.
-- `config/keyboard.rs` holds the keyboard layouts as char remaps applied to `KeyEvent::Char`. The selected layout is persisted to `.nowwrite/.keyboard.config`.
-- `platform/linux/` uses ANSI escapes with the alternate screen plus `libc`/`terminal_size`. It never enters raw mode, so it isn't really interactive.
-- `platform/windows/` uses `crossterm` for raw mode and key events. Draw calls are queued into a shared frame buffer and written out in one go in `read_key()`. Console restore lives in an `Rc`-shared session, so it runs only when the last clone is dropped.
-- `platform/uefi/` is split into `display`, `input`, `filesystem`, `power`.
+- `Platform` trait (`src/platform/mod.rs`) covers input (`KeyEvent`), file I/O, `now() -> Timestamp`, and battery. `init()` returns the platform **and** a ratatui `Backend`. `REMAP_KEYBOARD_LAYOUT` is true only on UEFI, where firmware delivers US-layout chars. Paths passed to the platform are `/`-separated and relative to the document root (`"."`, `".nowwrite/x.bak"`).
+- `editor::Editor` (`src/editor/mod.rs`) is the single owner of the platform and the `ratatui::Terminal`. Its loop is: backup check → `terminal.draw` → `read_key` → dispatch by `Mode` (`Editing`, `Files(FileModal)`, `Keyboard(KeyboardModal)`). Modals are state + `render` + `handle_key`, drawn as overlays. File-operation errors go to the status-bar `message` instead of aborting.
+- `editor::buffer::TextBuffer` stores lines with **char-index** columns, converted to byte offsets internally. Undo/redo records `Insert`/`Delete { position, text }` and replays them through raw helpers that don't touch the undo stack.
+- `editor::markdown::highlight` splits a line into styled spans **including** the `*`/`#` markers, so screen columns equal cursor columns. Don't strip markers when rendering.
+- `file/` uses free functions taking `&mut P`. `manager` handles list/load/save/unused names. `BackupManager` writes `.nowwrite/<name>.<YYYYMMDD_HHMMSS>.bak` every 5 min and before each save. `config/keyboard.rs` stores layouts as static char remaps, persisted to `.nowwrite/.keyboard.config`.
+- `ui/` has the theme helpers (in `ui/mod.rs`), `editor_view`, `status_bar` and `modal`. Keep styles to Reset/White(+bold)/DarkGray backgrounds and glyphs to ASCII, box drawing and arrows. That is what the UEFI console can show.
+- `platform/terminal.rs` uses crossterm via the `ratatui::crossterm` re-export, not a direct dependency. `Drop` and a panic hook restore the terminal.
+- `platform/uefi/` targets uefi 0.41 (global allocator + panic handler come from crate features).
+  - `backend.rs` implements ratatui `Backend` over Simple Text Output. It batches same-color runs, maps any background to LightGray with black text, and skips the bottom-right cell, which would scroll the screen.
+  - `input.rs` prefers `InputEx`, which reports Ctrl state, then falls back to control chars. F2–F5 are aliases for Ctrl+S/L/N/K.
+  - `mod.rs` uses `uefi::fs::FileSystem` on the image's boot volume and converts paths to `\`-rooted UEFI paths. Don't use `FileSystem::create_dir_all`: for a root-level path it walks up to an empty parent and fails with a path error. `create_directory` creates each level itself.
+  - Firmware quirks found in QEMU/OVMF:
+    - The console splitter returns UNSUPPORTED from `set_cursor_position` when a narrower attached console can't reach a column, so cursor moves are best-effort.
+    - `output_string` warnings (e.g. unknown glyph) are not fatal.
 
-### Current state of the UEFI path
+### Testing under QEMU
 
-The UEFI target is incomplete:
-- `src/uefi_main.rs` is `#![no_std]`/`#![no_main]` and only initializes `uefi_services`. It does not construct `Editor` yet.
-- `UefiPlatform::init()` is `todo!()`.
-- The shared code (the `Platform` trait, editor, and file modules) uses `std::io::Result`, `std::path`, `String`/`Vec` from std, and `chrono`. None of these work under `no_std`. Getting the editor running on UEFI means moving the shared code to `alloc`/`core` types or a custom error type.
+`run-qemu.ps1` uses `scripts/fatimg.py`, a stdlib-only FAT16 image tool (MBR + one partition, long file names, subdirectories):
+- `create` builds `output/nowwrite-disk.img` from `output/drive/` plus `\EFI\BOOT\BOOTX64.EFI`.
+- `extract --skip EFI` copies the image back to `output/drive/` after QEMU exits. It also runs at startup, to recover a run that was killed.
 
-The Linux build is the working path for exercising editor behavior.
+Don't use QEMU's `fat:rw:<dir>` drive: it doesn't reliably write changes back to the host.
+
+Headless runs: `./scripts/run-qemu.ps1 -QemuArgs '-display','none','-monitor','tcp:127.0.0.1:4444,server,nowait'`. Drive them through the monitor:
+- `sendkey ctrl-s`, `sendkey f4` and similar send keys;
+- `screendump file.ppm` captures the screen; convert it to PNG to view;
+- `quit` ends QEMU, after which the script syncs files back.
+
+The firmware clock is UTC, so backup timestamps in the VM are UTC.
+
+### Not yet implemented (from PROMPT.md)
+
+- Shift+arrow selection: `TextBuffer` supports selections, but no key produces them.
+- Battery level (needs ACPI/EC access).
+- Turning off radios to save power.
+- Sleep on lid close.
+- Backups are only checked between keystrokes; there is no idle timer.

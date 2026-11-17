@@ -2,16 +2,15 @@
 name = "nowwrite"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.91"
+
+[lib]
+path = "src/lib.rs"
 
 [[bin]]
 name = "nowwrite"
 path = "src/main.rs"
-required-features = ["linux"]
-
-[[bin]]
-name = "nowwrite_windows"
-path = "src/windows_main.rs"
-required-features = ["windows"]
+required-features = ["terminal"]
 
 [[bin]]
 name = "nowwrite_uefi"
@@ -19,18 +18,17 @@ path = "src/uefi_main.rs"
 required-features = ["uefi"]
 
 [dependencies]
-uefi = { version = "0.23", features = ["alloc"], optional = true, default-features = false }
-uefi-services = { version = "0.20", optional = true, default-features = false }
-libc = { version = "0.2", optional = true }
-terminal_size = { version = "0.4", optional = true }
-crossterm = { version = "0.29", optional = true }
-chrono = "0.4"
+# default-features = false keeps ratatui no_std (+ alloc) for the UEFI build.
+ratatui = { version = "0.30", default-features = false }
+chrono = { version = "0.4", optional = true, default-features = false, features = ["clock"] }
+uefi = { version = "0.41", optional = true, features = ["alloc", "global_allocator", "panic_handler"] }
 
 [features]
-default = ["linux"]
-uefi = ["dep:uefi", "dep:uefi-services"]
-linux = ["dep:libc", "dep:terminal_size"]
-windows = ["dep:crossterm"]
+default = ["terminal"]
+# Linux/Windows/macOS terminal build via ratatui's crossterm backend.
+terminal = ["ratatui/crossterm", "dep:chrono"]
+# Standalone UEFI application (build with --target x86_64-unknown-uefi).
+uefi = ["dep:uefi"]
 
 [profile.release]
 opt-level = "z"

@@ -1,276 +1,154 @@
-use crate::platform::{Platform, TextAttribute, Color, KeyEvent, FileInfo};
-use std::io::Result;
+use crate::config::keyboard::{KeyboardLayout, LAYOUTS};
+use crate::platform::{FileInfo, KeyEvent};
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use ratatui::layout::{Position, Rect};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::Frame;
 
-pub enum ModalResult<T> {
-    Selected(T),
-    Cancelled,
+pub enum FileAction {
+    Open(String),
+    /// Create a new document with this name.
+    Create(String),
+    Cancel,
 }
 
-pub struct FileModal<P: Platform> {
-    platform: P,
+/// Lists the `.md` files and lets the user open one or name a new one.
+pub struct FileModal {
     files: Vec<FileInfo>,
-    selected_index: usize,
-    width: usize,
-    height: usize,
+    selected: usize,
+    /// `Some` while the user is typing a name for a new file.
+    new_name: Option<String>,
 }
 
-impl<P: Platform> FileModal<P> {
-    pub fn new(platform: P, path: &str) -> Result<Self> {
-        let (width, height) = platform.get_screen_size();
-        let files = platform.list_files(path)?;
-        
-        Ok(Self {
-            platform,
-            files,
-            selected_index: 0,
-            width,
-            height,
-        })
+impl FileModal {
+    pub fn new(files: Vec<FileInfo>) -> Self {
+        Self { files, selected: 0, new_name: None }
     }
 
-    pub fn show(&mut self) -> Result<ModalResult<String>> {
-        loop {
-            self.render()?;
-            let key = self.platform.read_key()?;
-            
+    /// Open directly in "new file" mode.
+    pub fn new_file(files: Vec<FileInfo>) -> Self {
+        Self { new_name: Some(String::new()), ..Self::new(files) }
+    }
+
+    pub fn handle_key(&mut self, key: KeyEvent) -> Option<FileAction> {
+        if let Some(name) = &mut self.new_name {
             match key {
-                KeyEvent::Enter => {
-                    if let Some(file) = self.files.get(self.selected_index) {
-                        if !file.is_directory {
-                            return Ok(ModalResult::Selected(file.name.clone()));
-                        }
+                KeyEvent::Char(c) if !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') => {
+                    name.push(c)
+                }
+                KeyEvent::Backspace => {
+                    name.pop();
+                }
+                KeyEvent::Enter if !name.trim().is_empty() => {
+                    let mut name = String::from(name.trim());
+                    if !name.ends_with(".md") {
+                        name.push_str(".md");
                     }
+                    return Some(FileAction::Create(name));
                 }
-                KeyEvent::Escape => return Ok(ModalResult::Cancelled),
-                KeyEvent::Up => {
-                    if self.selected_index > 0 {
-                        self.selected_index -= 1;
-                    }
-                }
-                KeyEvent::Down => {
-                    if self.selected_index < self.files.len().saturating_sub(1) {
-                        self.selected_index += 1;
-                    }
-                }
-                KeyEvent::CtrlN => {
-                    return Ok(ModalResult::Selected("new_file.md".to_string()));
-                }
+                KeyEvent::Escape => self.new_name = None,
                 _ => {}
             }
-        }
-    }
-
-    fn render(&mut self) -> Result<()> {
-        self.platform.clear_screen()?;
-        
-        let modal_width = 60.min(self.width - 4);
-        let modal_height = 15.min(self.height - 4);
-        let start_x = (self.width - modal_width) / 2;
-        let start_y = (self.height - modal_height) / 2;
-
-        self.draw_box(start_x, start_y, modal_width, modal_height)?;
-        
-        let title = "Select File";
-        let title_x = start_x + (modal_width - title.len()) / 2;
-        for (i, ch) in title.chars().enumerate() {
-            self.platform.draw_char(title_x + i, start_y, ch, TextAttribute {
-                bright: true,
-                background: Color::Default,
-            })?;
+            return None;
         }
 
-        let content_start_y = start_y + 2;
-        let content_height = modal_height - 4;
-        
-        for (i, file) in self.files.iter().enumerate().take(content_height) {
-            let y = content_start_y + i;
-            let is_selected = i == self.selected_index;
-            
-            let prefix = if is_selected { "> " } else { "  " };
-            let display_name = if file.is_directory {
-                format!("{}/", file.name)
-            } else {
-                file.name.clone()
-            };
-            
-            let line = format!("{}{}", prefix, display_name);
-            let max_len = modal_width - 4;
-            let truncated = if line.len() > max_len {
-                format!("{}...", &line[..max_len - 3])
-            } else {
-                line
-            };
-            
-            for (j, ch) in truncated.chars().enumerate() {
-                self.platform.draw_char(start_x + 2 + j, y, ch, if is_selected {
-                    TextAttribute {
-                        bright: true,
-                        background: Color::Grey,
-                    }
-                } else {
-                    TextAttribute::default()
-                })?;
+        match key {
+            KeyEvent::Up => self.selected = self.selected.saturating_sub(1),
+            KeyEvent::Down if self.selected + 1 < self.files.len() => self.selected += 1,
+            KeyEvent::Enter => {
+                if let Some(file) = self.files.get(self.selected) {
+                    return Some(FileAction::Open(file.name.clone()));
+                }
             }
+            KeyEvent::CtrlN => self.new_name = Some(String::new()),
+            KeyEvent::Escape => return Some(FileAction::Cancel),
+            _ => {}
         }
-
-        let help_y = start_y + modal_height - 2;
-        let help_text = "[↑↓] Navigate  [Enter] Open  [Ctrl+N] New";
-        let help_x = start_x + (modal_width - help_text.len()) / 2;
-        for (i, ch) in help_text.chars().enumerate() {
-            self.platform.draw_char(help_x + i, help_y, ch, TextAttribute {
-                bright: false,
-                background: Color::Default,
-            })?;
-        }
-        
-        Ok(())
+        None
     }
 
-    fn draw_box(&mut self, x: usize, y: usize, width: usize, height: usize) -> Result<()> {
-        for i in 0..width {
-            self.platform.draw_char(x + i, y, '─', TextAttribute::default())?;
-            self.platform.draw_char(x + i, y + height - 1, '─', TextAttribute::default())?;
+    pub fn render(&self, frame: &mut Frame) {
+        let area = super::centered(frame.area(), 60, 16);
+        frame.render_widget(Clear, area);
+
+        if let Some(name) = &self.new_name {
+            let block = Block::bordered()
+                .title(Line::from(" New File ").centered())
+                .title_bottom(Line::from(" Enter create  Esc back ").centered());
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+            let prompt = format!(" Name: {name}");
+            let cursor_x = inner.x + prompt.chars().count() as u16;
+            frame.render_widget(Paragraph::new(prompt), inner);
+            frame.set_cursor_position(Position::new(cursor_x.min(inner.right() - 1), inner.y));
+            return;
         }
-        
-        for i in 0..height {
-            self.platform.draw_char(x, y + i, '│', TextAttribute::default())?;
-            self.platform.draw_char(x + width - 1, y + i, '│', TextAttribute::default())?;
+
+        let block = Block::bordered()
+            .title(Line::from(" Select File ").centered().style(super::bright()))
+            .title_bottom(Line::from(" Enter open  Ctrl+N new  Esc cancel ").centered());
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        if self.files.is_empty() {
+            frame.render_widget(
+                Paragraph::new(" No .md files here. Press Ctrl+N to create one."),
+                inner,
+            );
+            return;
         }
-        
-        self.platform.draw_char(x, y, '┌', TextAttribute::default())?;
-        self.platform.draw_char(x + width - 1, y, '┐', TextAttribute::default())?;
-        self.platform.draw_char(x, y + height - 1, '└', TextAttribute::default())?;
-        self.platform.draw_char(x + width - 1, y + height - 1, '┘', TextAttribute::default())?;
-        
-        Ok(())
+        let items: Vec<ListItem> = self.files.iter().map(|f| ListItem::new(f.name.as_str())).collect();
+        render_list(frame, inner, items, self.selected);
     }
 }
 
-pub struct KeyboardModal<P: Platform> {
-    platform: P,
-    layouts: Vec<(&'static str, &'static str)>,
-    selected_index: usize,
-    width: usize,
-    height: usize,
+/// Lets the user pick a keyboard layout.
+pub struct KeyboardModal {
+    selected: usize,
 }
 
-impl<P: Platform> KeyboardModal<P> {
-    pub fn new(platform: P) -> Self {
-        let (width, height) = platform.get_screen_size();
-        let layouts = vec![
-            ("en-US", "English - United States"),
-            ("de-CH", "German - Switzerland"),
-            ("fr-FR", "French - France"),
-            ("es-ES", "Spanish - Spain"),
-        ];
-        
-        Self {
-            platform,
-            layouts,
-            selected_index: 0,
-            width,
-            height,
-        }
+impl KeyboardModal {
+    pub fn new(current: KeyboardLayout) -> Self {
+        let selected = LAYOUTS.iter().position(|l| *l == current).unwrap_or(0);
+        Self { selected }
     }
 
-    pub fn show(&mut self) -> Result<ModalResult<String>> {
-        loop {
-            self.render()?;
-            let key = self.platform.read_key()?;
-            
-            match key {
-                KeyEvent::Enter => {
-                    if let Some((code, _)) = self.layouts.get(self.selected_index) {
-                        return Ok(ModalResult::Selected(code.to_string()));
-                    }
-                }
-                KeyEvent::Escape => return Ok(ModalResult::Cancelled),
-                KeyEvent::Up => {
-                    if self.selected_index > 0 {
-                        self.selected_index -= 1;
-                    }
-                }
-                KeyEvent::Down => {
-                    if self.selected_index < self.layouts.len().saturating_sub(1) {
-                        self.selected_index += 1;
-                    }
-                }
-                _ => {}
-            }
+    /// Returns `Some(Some(code))` when chosen, `Some(None)` when cancelled.
+    pub fn handle_key(&mut self, key: KeyEvent) -> Option<Option<&'static str>> {
+        match key {
+            KeyEvent::Up => self.selected = self.selected.saturating_sub(1),
+            KeyEvent::Down if self.selected + 1 < LAYOUTS.len() => self.selected += 1,
+            KeyEvent::Enter => return Some(Some(LAYOUTS[self.selected].code)),
+            KeyEvent::Escape => return Some(None),
+            _ => {}
         }
+        None
     }
 
-    fn render(&mut self) -> Result<()> {
-        self.platform.clear_screen()?;
-        
-        let modal_width = 50.min(self.width - 4);
-        let modal_height = 10.min(self.height - 4);
-        let start_x = (self.width - modal_width) / 2;
-        let start_y = (self.height - modal_height) / 2;
+    pub fn render(&self, frame: &mut Frame) {
+        let area = super::centered(frame.area(), 50, LAYOUTS.len() as u16 + 4);
+        frame.render_widget(Clear, area);
+        let block = Block::bordered()
+            .title(Line::from(" Keyboard Layout ").centered().style(super::bright()))
+            .title_bottom(Line::from(" Enter select  Esc cancel ").centered());
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
 
-        self.draw_box(start_x, start_y, modal_width, modal_height)?;
-        
-        let title = "Select Keyboard Layout";
-        let title_x = start_x + (modal_width - title.len()) / 2;
-        for (i, ch) in title.chars().enumerate() {
-            self.platform.draw_char(title_x + i, start_y, ch, TextAttribute {
-                bright: true,
-                background: Color::Default,
-            })?;
-        }
-
-        let content_start_y = start_y + 2;
-        
-        for (i, (code, name)) in self.layouts.iter().enumerate() {
-            let y = content_start_y + i;
-            let is_selected = i == self.selected_index;
-            
-            let prefix = if is_selected { "> " } else { "  " };
-            let line = format!("{}{} ({})", prefix, code, name);
-            
-            for (j, ch) in line.chars().enumerate() {
-                if j < modal_width - 4 {
-                    self.platform.draw_char(start_x + 2 + j, y, ch, if is_selected {
-                        TextAttribute {
-                            bright: true,
-                            background: Color::Grey,
-                        }
-                    } else {
-                        TextAttribute::default()
-                    })?;
-                }
-            }
-        }
-
-        let help_y = start_y + modal_height - 2;
-        let help_text = "[↑↓] Navigate  [Enter] Select";
-        let help_x = start_x + (modal_width - help_text.len()) / 2;
-        for (i, ch) in help_text.chars().enumerate() {
-            self.platform.draw_char(help_x + i, help_y, ch, TextAttribute {
-                bright: false,
-                background: Color::Default,
-            })?;
-        }
-        
-        Ok(())
+        let items: Vec<ListItem> = LAYOUTS
+            .iter()
+            .map(|l| ListItem::new(format!("{} ({})", l.name, l.code)))
+            .collect();
+        render_list(frame, inner, items, self.selected);
     }
+}
 
-    fn draw_box(&mut self, x: usize, y: usize, width: usize, height: usize) -> Result<()> {
-        for i in 0..width {
-            self.platform.draw_char(x + i, y, '─', TextAttribute::default())?;
-            self.platform.draw_char(x + i, y + height - 1, '─', TextAttribute::default())?;
-        }
-        
-        for i in 0..height {
-            self.platform.draw_char(x, y + i, '│', TextAttribute::default())?;
-            self.platform.draw_char(x + width - 1, y + i, '│', TextAttribute::default())?;
-        }
-        
-        self.platform.draw_char(x, y, '┌', TextAttribute::default())?;
-        self.platform.draw_char(x + width - 1, y, '┐', TextAttribute::default())?;
-        self.platform.draw_char(x, y + height - 1, '└', TextAttribute::default())?;
-        self.platform.draw_char(x + width - 1, y + height - 1, '┘', TextAttribute::default())?;
-        
-        Ok(())
-    }
+fn render_list(frame: &mut Frame, area: Rect, items: Vec<ListItem>, selected: usize) {
+    let list = List::new(items)
+        .highlight_style(super::selected())
+        .highlight_symbol("> ");
+    let mut state = ListState::default().with_selected(Some(selected));
+    frame.render_stateful_widget(list, area, &mut state);
 }

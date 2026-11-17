@@ -1,85 +1,131 @@
-#[cfg(feature = "uefi")]
-use uefi::proto::console::text::{Input, Key, ScanCode};
+//! Keyboard input. Prefers Simple Text Input Ex, which reports Ctrl/Shift
+//! state; falls back to plain Simple Text Input and control characters.
 
+use crate::error::{Error, Result};
 use crate::platform::KeyEvent;
-use std::io::Result;
+use alloc::format;
+use uefi::boot::{self, OpenProtocolAttributes, OpenProtocolParams, ScopedProtocol};
+use uefi::proto::console::text::{InputEx, Key, ScanCode};
+use uefi::{system, Handle};
 
-pub struct UefiInput;
+/// `EFI_RIGHT_CONTROL_PRESSED | EFI_LEFT_CONTROL_PRESSED` in the key shift state.
+const CONTROL_PRESSED: u32 = 0x0000_0004 | 0x0000_0008;
+
+pub struct UefiInput {
+    input_ex: Option<ScopedProtocol<InputEx>>,
+}
 
 impl UefiInput {
-    #[cfg(feature = "uefi")]
-    pub fn read_key(stdin: &mut Input) -> Result<KeyEvent> {
-        loop {
-            let key_event = stdin.wait_for_key_stroke().map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::Other, format!("UEFI error: {:?}", e))
-            })?;
+    pub fn new() -> Self {
+        Self { input_ex: open_input_ex() }
+    }
 
-            match key_event {
-                Key::Printable(unicode_char) => {
-                    let ch = unicode_char.into();
-                    
-                    // Check for control characters
-                    match ch {
-                        '\r' => return Ok(KeyEvent::Enter),
-                        '\x08' => return Ok(KeyEvent::Backspace),
-                        '\t' => return Ok(KeyEvent::Tab),
-                        '\x1b' => return Ok(KeyEvent::Escape),
-                        '\x13' => return Ok(KeyEvent::CtrlS),    // Ctrl+S
-                        '\x0c' => return Ok(KeyEvent::CtrlL),    // Ctrl+L
-                        '\x0e' => return Ok(KeyEvent::CtrlN),    // Ctrl+N
-                        '\x09' => return Ok(KeyEvent::CtrlI),    // Ctrl+I
-                        '\x02' => return Ok(KeyEvent::CtrlB),    // Ctrl+B
-                        '\x0b' => return Ok(KeyEvent::CtrlK),    // Ctrl+K
-                        '\x1a' => return Ok(KeyEvent::CtrlZ),    // Ctrl+Z
-                        '\x19' => return Ok(KeyEvent::CtrlY),    // Ctrl+Y
-                        c if c.is_control() => continue,  // Skip other control chars
-                        c => return Ok(KeyEvent::Char(c)),
+    pub fn read_key(&mut self) -> Result<KeyEvent> {
+        loop {
+            let (key, ctrl) = match &mut self.input_ex {
+                Some(input) => {
+                    let event = input.wait_for_key_event().map_err(err)?;
+                    boot::wait_for_event(&mut [event]).map_err(|e| err(e.to_err_without_payload()))?;
+                    match input.read_key().map_err(err)? {
+                        Some(data) => {
+                            let ctrl = data
+                                .key_state
+                                .key_shift_state
+                                .is_some_and(|s| s.bits() & CONTROL_PRESSED != 0);
+                            (data.key, ctrl)
+                        }
+                        None => continue,
                     }
                 }
-                Key::Special(scan_code) => {
-                    match scan_code {
-                        ScanCode::UP => return Ok(KeyEvent::Up),
-                        ScanCode::DOWN => return Ok(KeyEvent::Down),
-                        ScanCode::LEFT => return Ok(KeyEvent::Left),
-                        ScanCode::RIGHT => return Ok(KeyEvent::Right),
-                        ScanCode::HOME => return Ok(KeyEvent::Home),
-                        ScanCode::END => return Ok(KeyEvent::End),
-                        ScanCode::PAGE_UP => return Ok(KeyEvent::PageUp),
-                        ScanCode::PAGE_DOWN => return Ok(KeyEvent::PageDown),
-                        ScanCode::DELETE => return Ok(KeyEvent::Delete),
-                        ScanCode::ESCAPE => return Ok(KeyEvent::Escape),
-                        _ => continue,  // Skip unknown scan codes
+                None => {
+                    let key = system::with_stdin(|stdin| -> uefi::Result<Option<Key>> {
+                        let event = stdin.wait_for_key_event()?;
+                        boot::wait_for_event(&mut [event]).map_err(|e| e.to_err_without_payload())?;
+                        stdin.read_key()
+                    })
+                    .map_err(err)?;
+                    match key {
+                        Some(key) => (key, false),
+                        None => continue,
                     }
                 }
+            };
+            if let Some(mapped) = map_key(key, ctrl) {
+                return Ok(mapped);
             }
         }
     }
+}
 
-    #[cfg(not(feature = "uefi"))]
-    pub fn read_key(_stdin: &mut ()) -> Result<KeyEvent> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "UEFI input not available",
-        ))
+fn err(e: uefi::Error) -> Error {
+    Error::Io(format!("{e:?}"))
+}
+
+fn open_input_ex() -> Option<ScopedProtocol<InputEx>> {
+    let st = uefi::table::system_table_raw()?;
+    // SAFETY: the system table pointer is valid while boot services run.
+    let raw_handle = unsafe { st.as_ref().stdin_handle };
+    // SAFETY: the firmware-provided console-in handle is a valid handle.
+    let handle = unsafe { Handle::from_ptr(raw_handle) }?;
+    // SAFETY: we only use the protocol from this single-threaded app, and the
+    // console-in handle is not uninstalled while boot services run.
+    unsafe {
+        boot::open_protocol::<InputEx>(
+            OpenProtocolParams { handle, agent: boot::image_handle(), controller: None },
+            OpenProtocolAttributes::GetProtocol,
+        )
     }
+    .ok()
+}
 
-    #[cfg(feature = "uefi")]
-    pub fn flush_buffer(stdin: &mut Input) -> Result<()> {
-        // Flush any pending key strokes
-        while stdin.read_key_stroke().is_ok() {
-            // Continue reading until buffer is empty
+fn map_key(key: Key, ctrl: bool) -> Option<KeyEvent> {
+    match key {
+        Key::Printable(c16) => {
+            let ch = char::from(c16);
+            if ctrl && ch.is_ascii_alphabetic() {
+                return ctrl_letter(ch.to_ascii_lowercase());
+            }
+            match ch {
+                '\r' | '\n' => Some(KeyEvent::Enter),
+                '\x08' => Some(KeyEvent::Backspace),
+                '\t' => Some(KeyEvent::Tab),
+                // Firmware without InputEx may send Ctrl+letter as a control char.
+                '\x01'..='\x1a' => ctrl_letter((b'a' + (ch as u8 - 1)) as char),
+                c if c.is_control() => None,
+                c => Some(KeyEvent::Char(c)),
+            }
         }
-        Ok(())
+        Key::Special(scan) => Some(match scan {
+            ScanCode::UP => KeyEvent::Up,
+            ScanCode::DOWN => KeyEvent::Down,
+            ScanCode::LEFT => KeyEvent::Left,
+            ScanCode::RIGHT => KeyEvent::Right,
+            ScanCode::HOME => KeyEvent::Home,
+            ScanCode::END => KeyEvent::End,
+            ScanCode::PAGE_UP => KeyEvent::PageUp,
+            ScanCode::PAGE_DOWN => KeyEvent::PageDown,
+            ScanCode::DELETE => KeyEvent::Delete,
+            ScanCode::ESCAPE => KeyEvent::Escape,
+            // Aliases for firmware that doesn't report Ctrl.
+            ScanCode::FUNCTION_2 => KeyEvent::CtrlS,
+            ScanCode::FUNCTION_3 => KeyEvent::CtrlL,
+            ScanCode::FUNCTION_4 => KeyEvent::CtrlN,
+            ScanCode::FUNCTION_5 => KeyEvent::CtrlK,
+            _ => return None,
+        }),
     }
+}
 
-    #[cfg(feature = "uefi")]
-    pub fn wait_for_any_key(stdin: &mut Input) -> Result<KeyEvent> {
-        Self::read_key(stdin)
-    }
-
-    #[cfg(feature = "uefi")]
-    pub fn is_key_available(stdin: &Input) -> bool {
-        // Check if a key is available without blocking
-        stdin.read_key_stroke().is_ok()
-    }
+fn ctrl_letter(ch: char) -> Option<KeyEvent> {
+    Some(match ch {
+        's' => KeyEvent::CtrlS,
+        'l' => KeyEvent::CtrlL,
+        'n' => KeyEvent::CtrlN,
+        'i' => KeyEvent::CtrlI,
+        'b' => KeyEvent::CtrlB,
+        'k' => KeyEvent::CtrlK,
+        'z' => KeyEvent::CtrlZ,
+        'y' => KeyEvent::CtrlY,
+        _ => return None,
+    })
 }

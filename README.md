@@ -8,7 +8,7 @@ A minimalist, distraction-free markdown editor that runs directly from UEFI firm
 - **UEFI-native**: Boots directly from firmware, no OS required
 - **Automatic backups**: Every 5 minutes and on manual save
 - **Markdown support**: Basic syntax highlighting for headings, bold, and italic
-- **Multiple keyboard layouts**: US English, German-Swiss, French, Spanish
+- **Keyboard layouts**: US English and Swiss German (UEFI version)
 - **UTF-8 support**: International character support
 - **Terminal version**: The same editor runs in a Linux, macOS or Windows terminal for development and testing
 
@@ -75,7 +75,9 @@ sudo ./scripts/create-boot-drive.sh /dev/sdX NOWWRITE
 
 The F-keys exist because some firmware doesn't report Ctrl key combinations.
 
-The keyboard layout setting (Ctrl+K) only applies to the UEFI version. Firmware always reports US-layout characters, so NowWrite remaps them itself. In a terminal, the operating system's own layout is used.
+The keyboard layout setting (Ctrl+K) only applies to the UEFI version. Firmware always reports US-layout characters, so NowWrite remaps them itself. That covers shifted keys, AltGr characters (`@ # | € [ ] { }`) and dead keys (`` ^ ` ´ ¨ ~ ``, e.g. `^` then `e` gives `ê`). In a terminal, the operating system's own layout is used.
+
+Firmware doesn't report the key left of `Y` on Swiss keyboards, so with de-CH use **AltGr+`,`** for `<`, **AltGr+`.`** for `>` and **AltGr+`-`** for `\`.
 
 ## Architecture
 

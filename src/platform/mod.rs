@@ -10,6 +10,9 @@ use alloc::vec::Vec;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyEvent {
     Char(char),
+    /// A character typed with AltGr (right Alt) held, before layout mapping.
+    /// Only platforms that report US-layout characters produce this.
+    AltGr(char),
     Enter,
     Backspace,
     Delete,
@@ -33,6 +36,9 @@ pub enum KeyEvent {
     CtrlY,
     /// The screen size changed; nothing to do except redraw.
     Resize,
+    /// No key arrived within the platform's tick interval. Drives the
+    /// software cursor blink and idle backups.
+    Tick,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +103,11 @@ pub trait Platform: Sized {
     /// Whether the editor should apply its own keyboard-layout remapping.
     /// False where the OS already applies the user's layout.
     const REMAP_KEYBOARD_LAYOUT: bool;
+
+    /// Whether the editor should draw (and blink) its own cursor instead of
+    /// using the backend's hardware cursor. Requires `read_key` to return
+    /// `KeyEvent::Tick` about twice a second while idle.
+    const SOFTWARE_CURSOR: bool;
 
     fn init() -> Result<(Self, Self::Backend)>;
     fn read_key(&mut self) -> Result<KeyEvent>;

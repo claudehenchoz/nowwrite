@@ -12,9 +12,12 @@ use crate::ui::modal::{FileAction, FileModal, KeyboardModal};
 use crate::ui::status_bar;
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
 use buffer::TextBuffer;
 use cursor::Cursor;
 use ratatui::layout::{Constraint, Layout};
+use ratatui::style::{Color, Style};
 use ratatui::Terminal;
 
 enum Mode {
@@ -35,6 +38,8 @@ pub struct Editor<P: Platform> {
     message: Option<String>,
     /// Set after Escape with unsaved changes; a second Escape quits.
     quit_armed: bool,
+    /// Blink phase of the software cursor (see `Platform::SOFTWARE_CURSOR`).
+    cursor_on: bool,
     running: bool,
 }
 
@@ -55,6 +60,7 @@ impl<P: Platform> Editor<P> {
             backups: BackupManager::default(),
             message: None,
             quit_armed: false,
+            cursor_on: true,
             running: true,
         })
     }
@@ -66,7 +72,6 @@ impl<P: Platform> Editor<P> {
             }
             self.draw()?;
             let key = self.platform.read_key()?;
-            self.message = None;
             self.handle_key(key);
         }
         self.terminal.clear().map_err(Error::io)?;
@@ -75,17 +80,31 @@ impl<P: Platform> Editor<P> {
 
     fn draw(&mut self) -> Result<()> {
         let battery = self.platform.battery_status();
+        let cursor_on = self.cursor_on;
         let Self { terminal, buffer, view, mode, message, .. } = self;
         terminal
             .draw(|frame| {
                 let [main, status] =
                     Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
-                view.render(frame, main, buffer, matches!(mode, Mode::Editing));
+                let editor_cursor = view.render(frame, main, buffer);
                 status_bar::render(frame, status, buffer, battery, message.as_deref());
-                match mode {
+                let cursor = match mode {
+                    Mode::Editing => editor_cursor,
                     Mode::Files(modal) => modal.render(frame),
-                    Mode::Keyboard(modal) => modal.render(frame),
-                    Mode::Editing => {}
+                    Mode::Keyboard(modal) => {
+                        modal.render(frame);
+                        None
+                    }
+                };
+
+                let Some(position) = cursor else { return };
+                if !P::SOFTWARE_CURSOR {
+                    frame.set_cursor_position(position);
+                } else if cursor_on {
+                    // Inverted block; the UEFI backend shows it as black on grey.
+                    if let Some(cell) = frame.buffer_mut().cell_mut(position) {
+                        cell.set_style(Style::new().fg(Color::Black).bg(Color::Gray));
+                    }
                 }
             })
             .map_err(Error::io)?;
@@ -93,13 +112,38 @@ impl<P: Platform> Editor<P> {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
-        let key = match key {
-            KeyEvent::Char(ch) if P::REMAP_KEYBOARD_LAYOUT => {
-                KeyEvent::Char(self.keyboard.current().map_char(ch))
+        match key {
+            KeyEvent::Tick => {
+                self.cursor_on = !self.cursor_on;
+                return;
             }
-            other => other,
-        };
+            KeyEvent::Resize => return,
+            _ => {
+                // Keep the cursor visible while typing.
+                self.cursor_on = true;
+                self.message = None;
+            }
+        }
 
+        // Apply the keyboard layout. Dead keys produce nothing until the next
+        // character; a non-combining pair produces two.
+        let keys: Vec<KeyEvent> = match key {
+            KeyEvent::Char(ch) | KeyEvent::AltGr(ch) if P::REMAP_KEYBOARD_LAYOUT => {
+                let altgr = matches!(key, KeyEvent::AltGr(_));
+                self.keyboard.translate(ch, altgr).into_iter().map(KeyEvent::Char).collect()
+            }
+            KeyEvent::AltGr(ch) => vec![KeyEvent::Char(ch)],
+            other => {
+                self.keyboard.cancel_dead_key();
+                vec![other]
+            }
+        };
+        for key in keys {
+            self.dispatch(key);
+        }
+    }
+
+    fn dispatch(&mut self, key: KeyEvent) {
         match &mut self.mode {
             Mode::Editing => self.handle_editing_key(key),
             Mode::Files(modal) => {

@@ -21,7 +21,7 @@ pub struct UefiBackend {
 }
 
 impl UefiBackend {
-    /// Switch to the text mode with the most cells and enable the cursor.
+    /// Switch to the text mode with the most cells and hide the firmware cursor.
     pub fn new() -> Result<Self> {
         system::with_stdout(|out| {
             let modes: Vec<_> = out.modes().collect();
@@ -29,7 +29,8 @@ impl UefiBackend {
                 // Some firmware rejects modes it lists; the current one still works.
                 let _ = out.set_mode(best);
             }
-            let _ = out.enable_cursor(true);
+            // The editor draws its own cursor (Platform::SOFTWARE_CURSOR).
+            let _ = out.enable_cursor(false);
             out.set_color(Color::LightGray, Color::Black).map_err(uefi_err)?;
             out.clear().map_err(uefi_err)?;
             let mode = out

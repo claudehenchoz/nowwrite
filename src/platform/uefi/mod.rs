@@ -41,12 +41,14 @@ impl Platform for UefiPlatform {
     type Backend = UefiBackend;
     // Firmware delivers US-layout characters, so apply the user's layout.
     const REMAP_KEYBOARD_LAYOUT: bool = true;
+    // The firmware cursor doesn't blink and is erased by redraws.
+    const SOFTWARE_CURSOR: bool = true;
 
     fn init() -> Result<(Self, Self::Backend)> {
         let backend = UefiBackend::new()?;
         let fs = boot::get_image_file_system(boot::image_handle())
             .map_err(|e| Error::Io(format!("boot volume not accessible: {e:?}")))?;
-        let platform = Self { fs: FileSystem::new(fs), input: UefiInput::new() };
+        let platform = Self { fs: FileSystem::new(fs), input: UefiInput::new()? };
         Ok((platform, backend))
     }
 
@@ -127,10 +129,12 @@ impl Platform for UefiPlatform {
 impl Drop for UefiPlatform {
     fn drop(&mut self) {
         // Leave the console in its default state for the firmware.
-        let _ = system::with_stdout(|out| {
+        let _ = system::with_stdout(|out| -> uefi::Result {
             out.set_color(Color::LightGray, Color::Black)?;
             out.clear()?;
-            out.enable_cursor(true)
+            // Some consoles don't support toggling the cursor; that's fine.
+            let _ = out.enable_cursor(true);
+            Ok(())
         });
     }
 }

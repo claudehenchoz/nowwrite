@@ -21,7 +21,8 @@ impl EditorView {
         self.page_height.max(1)
     }
 
-    pub fn render(&mut self, frame: &mut Frame, area: Rect, buffer: &TextBuffer, show_cursor: bool) {
+    /// Draw the document; returns the cursor's screen position.
+    pub fn render(&mut self, frame: &mut Frame, area: Rect, buffer: &TextBuffer) -> Option<Position> {
         let height = usize::from(area.height);
         let width = usize::from(area.width);
         self.page_height = height;
@@ -56,11 +57,12 @@ impl EditorView {
         let scroll_x = u16::try_from(self.scroll_x).unwrap_or(u16::MAX);
         frame.render_widget(Paragraph::new(lines).scroll((0, scroll_x)), area);
 
-        if show_cursor {
-            let x = area.x + (cursor.column - self.scroll_x) as u16;
-            let y = area.y + (cursor.line - self.scroll_y) as u16;
-            frame.set_cursor_position(Position::new(x, y));
+        if area.is_empty() {
+            return None;
         }
+        let x = area.x + (cursor.column - self.scroll_x) as u16;
+        let y = area.y + (cursor.line - self.scroll_y) as u16;
+        Some(Position::new(x, y))
     }
 }
 

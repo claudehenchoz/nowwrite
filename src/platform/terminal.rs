@@ -72,6 +72,8 @@ fn map_key(key: event::KeyEvent) -> Option<KeyEvent> {
 impl Platform for TerminalPlatform {
     type Backend = CrosstermBackend<Stdout>;
     const REMAP_KEYBOARD_LAYOUT: bool = false;
+    // Terminals blink their own cursor.
+    const SOFTWARE_CURSOR: bool = false;
 
     fn init() -> Result<(Self, Self::Backend)> {
         terminal::enable_raw_mode()?;
@@ -90,6 +92,10 @@ impl Platform for TerminalPlatform {
 
     fn read_key(&mut self) -> Result<KeyEvent> {
         loop {
+            // Wake up periodically so idle backups still happen.
+            if !event::poll(std::time::Duration::from_secs(1))? {
+                return Ok(KeyEvent::Tick);
+            }
             match event::read()? {
                 // Windows reports releases too.
                 Event::Key(key) if key.kind != KeyEventKind::Release => {

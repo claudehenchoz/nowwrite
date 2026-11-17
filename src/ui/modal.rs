@@ -70,7 +70,8 @@ impl FileModal {
         None
     }
 
-    pub fn render(&self, frame: &mut Frame) {
+    /// Draw the modal; returns the text cursor position while naming a file.
+    pub fn render(&self, frame: &mut Frame) -> Option<Position> {
         let area = super::centered(frame.area(), 60, 16);
         frame.render_widget(Clear, area);
 
@@ -83,8 +84,7 @@ impl FileModal {
             let prompt = format!(" Name: {name}");
             let cursor_x = inner.x + prompt.chars().count() as u16;
             frame.render_widget(Paragraph::new(prompt), inner);
-            frame.set_cursor_position(Position::new(cursor_x.min(inner.right() - 1), inner.y));
-            return;
+            return Some(Position::new(cursor_x.min(inner.right() - 1), inner.y));
         }
 
         let block = Block::bordered()
@@ -98,10 +98,11 @@ impl FileModal {
                 Paragraph::new(" No .md files here. Press Ctrl+N to create one."),
                 inner,
             );
-            return;
+            return None;
         }
         let items: Vec<ListItem> = self.files.iter().map(|f| ListItem::new(f.name.as_str())).collect();
         render_list(frame, inner, items, self.selected);
+        None
     }
 }
 

@@ -4,56 +4,80 @@
 use crate::error::{Error, Result};
 use crate::platform::KeyEvent;
 use alloc::format;
-use uefi::boot::{self, OpenProtocolAttributes, OpenProtocolParams, ScopedProtocol};
+use core::time::Duration;
+use uefi::boot::{
+    self, EventType, OpenProtocolAttributes, OpenProtocolParams, ScopedProtocol, TimerTrigger, Tpl,
+};
 use uefi::proto::console::text::{InputEx, Key, ScanCode};
-use uefi::{system, Handle};
+use uefi::{system, Event, Handle};
 
 /// `EFI_RIGHT_CONTROL_PRESSED | EFI_LEFT_CONTROL_PRESSED` in the key shift state.
 const CONTROL_PRESSED: u32 = 0x0000_0004 | 0x0000_0008;
+/// `EFI_RIGHT_ALT_PRESSED`: AltGr on international keyboards.
+const RIGHT_ALT_PRESSED: u32 = 0x0000_0010;
+
+/// How often `read_key` returns `KeyEvent::Tick` while idle (cursor blink).
+const TICK: Duration = Duration::from_millis(500);
 
 pub struct UefiInput {
     input_ex: Option<ScopedProtocol<InputEx>>,
+    timer: Event,
 }
 
 impl UefiInput {
-    pub fn new() -> Self {
-        Self { input_ex: open_input_ex() }
+    pub fn new() -> Result<Self> {
+        // SAFETY: a plain timer event with no notification function.
+        let timer = unsafe { boot::create_event(EventType::TIMER, Tpl::CALLBACK, None, None) }
+            .map_err(err)?;
+        boot::set_timer(&timer, TimerTrigger::Periodic(TICK)).map_err(err)?;
+        Ok(Self { input_ex: open_input_ex(), timer })
+    }
+
+    /// Wait for the key event or the tick timer. Returns true if a key is ready.
+    fn wait_for_key(&self, key_event: Event) -> Result<bool> {
+        // SAFETY: the clone only lives for this call; `self.timer` outlives it.
+        let timer = unsafe { self.timer.unsafe_clone() };
+        let index = boot::wait_for_event(&mut [key_event, timer])
+            .map_err(|e| err(e.to_err_without_payload()))?;
+        Ok(index == 0)
     }
 
     pub fn read_key(&mut self) -> Result<KeyEvent> {
         loop {
-            let (key, ctrl) = match &mut self.input_ex {
-                Some(input) => {
-                    let event = input.wait_for_key_event().map_err(err)?;
-                    boot::wait_for_event(&mut [event]).map_err(|e| err(e.to_err_without_payload()))?;
-                    match input.read_key().map_err(err)? {
-                        Some(data) => {
-                            let ctrl = data
-                                .key_state
-                                .key_shift_state
-                                .is_some_and(|s| s.bits() & CONTROL_PRESSED != 0);
-                            (data.key, ctrl)
-                        }
-                        None => continue,
-                    }
+            let (key, ctrl, altgr) = if self.input_ex.is_some() {
+                let key_event = self.input_ex.as_ref().unwrap().wait_for_key_event().map_err(err)?;
+                if !self.wait_for_key(key_event)? {
+                    return Ok(KeyEvent::Tick);
                 }
-                None => {
-                    let key = system::with_stdin(|stdin| -> uefi::Result<Option<Key>> {
-                        let event = stdin.wait_for_key_event()?;
-                        boot::wait_for_event(&mut [event]).map_err(|e| e.to_err_without_payload())?;
-                        stdin.read_key()
-                    })
-                    .map_err(err)?;
-                    match key {
-                        Some(key) => (key, false),
-                        None => continue,
+                match self.input_ex.as_mut().unwrap().read_key().map_err(err)? {
+                    Some(data) => {
+                        let shift = data.key_state.key_shift_state.map_or(0, |s| s.bits());
+                        (data.key, shift & CONTROL_PRESSED != 0, shift & RIGHT_ALT_PRESSED != 0)
                     }
+                    None => continue,
+                }
+            } else {
+                let key_event = system::with_stdin(|stdin| stdin.wait_for_key_event()).map_err(err)?;
+                if !self.wait_for_key(key_event)? {
+                    return Ok(KeyEvent::Tick);
+                }
+                match system::with_stdin(|stdin| stdin.read_key()).map_err(err)? {
+                    Some(key) => (key, false, false),
+                    None => continue,
                 }
             };
-            if let Some(mapped) = map_key(key, ctrl) {
+            if let Some(mapped) = map_key(key, ctrl, altgr) {
                 return Ok(mapped);
             }
         }
+    }
+}
+
+impl Drop for UefiInput {
+    fn drop(&mut self) {
+        let _ = boot::set_timer(&self.timer, TimerTrigger::Cancel);
+        // SAFETY: we own the event and nothing else uses it after this.
+        let _ = boot::close_event(unsafe { self.timer.unsafe_clone() });
     }
 }
 
@@ -78,7 +102,7 @@ fn open_input_ex() -> Option<ScopedProtocol<InputEx>> {
     .ok()
 }
 
-fn map_key(key: Key, ctrl: bool) -> Option<KeyEvent> {
+fn map_key(key: Key, ctrl: bool, altgr: bool) -> Option<KeyEvent> {
     match key {
         Key::Printable(c16) => {
             let ch = char::from(c16);
@@ -92,6 +116,7 @@ fn map_key(key: Key, ctrl: bool) -> Option<KeyEvent> {
                 // Firmware without InputEx may send Ctrl+letter as a control char.
                 '\x01'..='\x1a' => ctrl_letter((b'a' + (ch as u8 - 1)) as char),
                 c if c.is_control() => None,
+                c if altgr => Some(KeyEvent::AltGr(c)),
                 c => Some(KeyEvent::Char(c)),
             }
         }

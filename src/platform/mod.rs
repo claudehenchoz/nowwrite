@@ -2,6 +2,8 @@
 pub mod linux;
 #[cfg(feature = "uefi")]
 pub mod uefi;
+#[cfg(feature = "windows")]
+pub mod windows;
 
 use std::io::Result;
 

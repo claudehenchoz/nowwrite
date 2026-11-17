@@ -21,6 +21,15 @@ A minimalist, distraction-free markdown editor that runs directly from UEFI firm
 ./output/nowwrite-linux
 ```
 
+### Windows Development Version
+
+```powershell
+.\scripts\build-windows.ps1
+.\output\nowwrite-windows.exe
+```
+
+Or run directly: `cargo run --no-default-features --features windows --bin nowwrite_windows`
+
 ### UEFI Version
 
 ```bash
@@ -90,7 +99,8 @@ The project uses Rust with conditional compilation for different platforms:
 [features]
 default = ["linux"]
 uefi = ["dep:uefi", "dep:uefi-services"]
-linux = ["dep:termios", "dep:terminal_size"]
+linux = ["dep:libc", "dep:terminal_size"]
+windows = ["dep:crossterm"]
 ```
 
 ## License

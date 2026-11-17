@@ -9,6 +9,11 @@ path = "src/main.rs"
 required-features = ["linux"]
 
 [[bin]]
+name = "nowwrite_windows"
+path = "src/windows_main.rs"
+required-features = ["windows"]
+
+[[bin]]
 name = "nowwrite_uefi"
 path = "src/uefi_main.rs"
 required-features = ["uefi"]
@@ -18,12 +23,14 @@ uefi = { version = "0.23", features = ["alloc"], optional = true, default-featur
 uefi-services = { version = "0.20", optional = true, default-features = false }
 libc = { version = "0.2", optional = true }
 terminal_size = { version = "0.4", optional = true }
+crossterm = { version = "0.29", optional = true }
 chrono = "0.4"
 
 [features]
 default = ["linux"]
 uefi = ["dep:uefi", "dep:uefi-services"]
 linux = ["dep:libc", "dep:terminal_size"]
+windows = ["dep:crossterm"]
 
 [profile.release]
 opt-level = "z"

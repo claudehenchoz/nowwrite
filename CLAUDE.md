@@ -8,12 +8,16 @@ NowWrite is a distraction-free, text-mode Markdown editor in Rust. The primary t
 
 ## Commands
 
-The build scripts are bash. On this Windows machine, run them from Git Bash/WSL or call `cargo` directly.
+The Linux/UEFI build scripts are bash (run from Git Bash/WSL or call `cargo` directly); the Windows script is PowerShell.
 
 ```bash
 # Linux/dev build (default feature = "linux") -> output/nowwrite-linux
 ./scripts/build-linux.sh
 cargo build --features linux
+
+# Windows/dev build -> output/nowwrite-windows.exe (run in a real console, e.g. Windows Terminal)
+./scripts/build-windows.ps1
+cargo run --no-default-features --features windows --bin nowwrite_windows
 
 # UEFI build -> output/NowWrite.efi (add --create-boot for output/boot/EFI/BOOT/BOOTX64.EFI)
 ./scripts/build-uefi.sh
@@ -28,7 +32,7 @@ cargo test editor::markdown::tests::<name>
 sudo ./scripts/create-boot-drive.sh /dev/sdX NOWWRITE
 ```
 
-The `linux` and `uefi` features are mutually exclusive. Always pass `--no-default-features` when enabling `uefi`. Each binary is gated by `required-features`: `nowwrite` (`src/main.rs`) needs `linux` and `nowwrite_uefi` (`src/uefi_main.rs`) needs `uefi`.
+The `linux`, `windows` and `uefi` features are mutually exclusive. Always pass `--no-default-features` when enabling `windows` or `uefi`. Each binary is gated by `required-features`: `nowwrite` (`src/main.rs`) needs `linux`, `nowwrite_windows` (`src/windows_main.rs`) needs `windows`, and `nowwrite_uefi` (`src/uefi_main.rs`) needs `uefi`. `cargo test` uses the default `linux` feature, which also compiles on Windows.
 
 ## Architecture
 
@@ -39,7 +43,9 @@ All editor logic is generic over the `Platform` trait in `src/platform/mod.rs`. 
 - `ui/` contains the renderer, the bottom status bar (filename, word/char counts, saved indicator, battery), and the modals (`FileModal` for `.md` file selection/creation, `KeyboardModal`), which return `ModalResult`.
 - `file/` has `FileManager` for load/save and `BackupManager`, which writes timestamped copies (`<name>.YYYYMMDD_HHMMSS.bak`) into `.nowwrite/` every 5 minutes and before each Ctrl+S save.
 - `config/keyboard.rs` holds the keyboard layouts as char remaps applied to `KeyEvent::Char`. The selected layout is persisted to `.nowwrite/.keyboard.config`.
-- `platform/linux/` uses ANSI escapes with the alternate screen plus `libc`/`terminal_size`. `platform/uefi/` is split into `display`, `input`, `filesystem`, `power`.
+- `platform/linux/` uses ANSI escapes with the alternate screen plus `libc`/`terminal_size`. It never enters raw mode, so it isn't really interactive.
+- `platform/windows/` uses `crossterm` for raw mode and key events. Draw calls are queued into a shared frame buffer and written out in one go in `read_key()`. Console restore lives in an `Rc`-shared session, so it runs only when the last clone is dropped.
+- `platform/uefi/` is split into `display`, `input`, `filesystem`, `power`.
 
 ### Current state of the UEFI path
 

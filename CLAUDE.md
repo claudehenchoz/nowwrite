@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-NowWrite is a distraction-free, text-mode Markdown editor in Rust. The primary target is a standalone UEFI application booted from a FAT32 USB drive (no OS); a Linux terminal build exists for developing and tweaking the UI. The original requirements live in `PROMPT.md`, and the intended design (module layout, UI mockups, power management, boot process) is in `nowwrite-design-doc.md`. Check both before adding features.
+NowWrite is a distraction-free, text-mode Markdown editor in Rust. The primary target is a standalone UEFI application booted from a FAT32 USB drive (no OS); a Linux terminal build exists for developing and tweaking the UI. The original requirements live in `docs/PROMPT.md`, and the intended design (module layout, UI mockups, power management, boot process) is in `docs/nowwrite-design-doc.md`. Check both before adding features.
 
 ## Commands
 

@@ -2,6 +2,8 @@
 pub mod terminal;
 #[cfg(feature = "uefi")]
 pub mod uefi;
+#[cfg(test)]
+pub mod mock;
 
 use crate::error::Result;
 use alloc::string::String;
@@ -34,6 +36,8 @@ pub enum KeyEvent {
     CtrlK,
     CtrlZ,
     CtrlY,
+    /// Theme picker (Ctrl+T, F6).
+    CtrlT,
     /// Quit (Ctrl+Q, F10).
     CtrlQ,
     /// Show the help overlay (F1).

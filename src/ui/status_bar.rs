@@ -5,7 +5,8 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::text::Line;
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
@@ -13,6 +14,8 @@ use ratatui::Frame;
 pub struct StatusInfo<'a> {
     /// Transient message (saved, errors, hints) until the next key.
     pub message: Option<&'a str>,
+    /// Show the message in the theme's error colour.
+    pub message_is_error: bool,
     /// Active keyboard layout code, where NowWrite applies layouts itself.
     pub layout: Option<&'a str>,
     /// Accent of a dead key waiting for its letter.
@@ -35,9 +38,6 @@ pub fn render(frame: &mut Frame, area: Rect, buffer: &TextBuffer, info: &StatusI
 
     let cursor = buffer.cursor();
     let mut parts: Vec<String> = Vec::new();
-    if let Some(message) = info.message {
-        parts.push(String::from(message));
-    }
     if let Some(accent) = info.pending_dead {
         parts.push(format!("{accent} + letter"));
     }
@@ -48,12 +48,22 @@ pub fn render(frame: &mut Frame, area: Rect, buffer: &TextBuffer, info: &StatusI
     if let Some(b) = info.battery {
         parts.push(format!("{}%{}", b.level, if b.charging { "+" } else { "" }));
     }
-    parts.push(String::from("F1 Help "));
-    let right = parts.join(" | ");
+    parts.push(String::new()); // separator before the help hint
+    let status = parts.join(" | ");
+
+    const HELP: &str = "F1 Help ";
+    let mut right = Vec::new();
+    if let Some(message) = info.message {
+        let style = if info.message_is_error { super::error() } else { Style::new() };
+        right.push(Span::styled(format!("{message} | "), style));
+    }
+    right.push(Span::raw(status));
+    right.push(Span::styled(HELP, super::bar_key()));
+    let right = Line::from(right);
+    let right_len = right.width();
 
     // While a message is showing (or space runs out), the counts step aside.
     let width = usize::from(area.width);
-    let right_len = right.chars().count();
     let fits = full_left.chars().count() + right_len + 2 <= width;
     let left = if info.message.is_none() && fits { full_left } else { short_left };
 
@@ -63,5 +73,5 @@ pub fn render(frame: &mut Frame, area: Rect, buffer: &TextBuffer, info: &StatusI
 
     let bar = super::bar();
     frame.render_widget(Paragraph::new(Line::from(left)).style(bar), left_area);
-    frame.render_widget(Paragraph::new(Line::from(right)).style(bar), right_area);
+    frame.render_widget(Paragraph::new(right).style(bar), right_area);
 }

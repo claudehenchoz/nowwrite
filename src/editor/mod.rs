@@ -8,23 +8,24 @@ use crate::file::backup::BackupManager;
 use crate::file::{file_name, manager};
 use crate::platform::{KeyEvent, Platform};
 use crate::ui::editor_view::EditorView;
-use crate::ui::modal::{self, FileAction, FileModal, KeyboardModal, NamePurpose};
+use crate::config::theme as theme_config;
+use crate::ui::modal::{self, FileAction, FileModal, KeyboardModal, NamePurpose, ThemeAction, ThemeModal};
 use crate::ui::status_bar::{self, StatusInfo};
 use alloc::boxed::Box;
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use buffer::TextBuffer;
 use cursor::Cursor;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Style};
 use ratatui::Terminal;
 
 enum Mode {
     Editing,
     Files(FileModal),
     Keyboard(KeyboardModal),
+    Theme(ThemeModal),
     /// "Save changes?" before doing `Pending`.
     Confirm(Pending),
     /// Help overlay; restores the boxed mode when closed.
@@ -49,6 +50,10 @@ pub struct Editor<P: Platform> {
     backups: BackupManager,
     /// Shown in the status bar until the next key press.
     message: Option<String>,
+    /// `message` is an error (shown in the theme's error colour).
+    message_is_error: bool,
+    /// Repaint every cell on the next draw (after a theme change).
+    repaint: bool,
     /// Action to continue with once a save (possibly via "Save As") succeeds.
     after_save: Option<Pending>,
     /// Column to aim for while moving up/down through rows of different length.
@@ -63,6 +68,8 @@ pub struct Editor<P: Platform> {
 
 impl<P: Platform> Editor<P> {
     pub fn new(mut platform: P, backend: P::Backend) -> Result<Self> {
+        // Load the theme first: clearing paints the screen in its background.
+        theme_config::load(&mut platform);
         let mut terminal = Terminal::new(backend).map_err(Error::io)?;
         terminal.clear().map_err(Error::io)?;
         let keyboard = KeyboardConfig::load(&mut platform);
@@ -77,6 +84,8 @@ impl<P: Platform> Editor<P> {
             keyboard,
             backups: BackupManager::default(),
             message: None,
+            message_is_error: false,
+            repaint: false,
             after_save: None,
             goal_x: None,
             cursor_on: true,
@@ -88,7 +97,7 @@ impl<P: Platform> Editor<P> {
     pub fn run(&mut self) -> Result<()> {
         while self.running {
             if let Err(err) = self.backups.check_and_backup(&mut self.platform, &self.buffer) {
-                self.message = Some(format!("Backup failed: {err}"));
+                self.fail(format!("Backup failed: {err}"));
             }
             self.draw()?;
             let key = self.platform.read_key()?;
@@ -98,10 +107,27 @@ impl<P: Platform> Editor<P> {
         Ok(())
     }
 
+    /// Show `text` in the status bar until the next key.
+    fn say(&mut self, text: impl Into<String>) {
+        self.message = Some(text.into());
+        self.message_is_error = false;
+    }
+
+    /// Show an error in the status bar until the next key.
+    fn fail(&mut self, text: impl Into<String>) {
+        self.message = Some(text.into());
+        self.message_is_error = true;
+    }
+
     fn draw(&mut self) -> Result<()> {
+        if core::mem::take(&mut self.repaint) {
+            // ratatui only redraws changed cells; a new theme changes them all.
+            self.terminal.clear().map_err(Error::io)?;
+        }
         let layout = P::REMAP_KEYBOARD_LAYOUT.then(|| self.keyboard.current().code);
         let info = StatusInfo {
             message: self.message.as_deref(),
+            message_is_error: self.message_is_error,
             layout,
             pending_dead: self.keyboard.pending_dead(),
             battery: self.platform.battery_status(),
@@ -122,6 +148,10 @@ impl<P: Platform> Editor<P> {
                         modal.render(frame);
                         None
                     }
+                    Mode::Theme(modal) => {
+                        modal.render(frame);
+                        None
+                    }
                     Mode::Confirm(_) => {
                         modal::render_confirm(frame, &document);
                         None
@@ -136,9 +166,8 @@ impl<P: Platform> Editor<P> {
                 if !P::SOFTWARE_CURSOR {
                     frame.set_cursor_position(position);
                 } else if cursor_on {
-                    // Inverted block; the UEFI backend shows it as black on grey.
                     if let Some(cell) = frame.buffer_mut().cell_mut(position) {
-                        cell.set_style(Style::new().fg(Color::Black).bg(Color::Gray));
+                        cell.set_style(crate::ui::cursor());
                     }
                 }
             })
@@ -223,12 +252,27 @@ impl<P: Platform> Editor<P> {
                     self.mode = Mode::Editing;
                     if let Some(code) = choice {
                         match self.keyboard.set_layout(&mut self.platform, code) {
-                            Ok(()) => self.message = Some(format!("Keyboard layout: {code}")),
-                            Err(err) => self.message = Some(format!("Could not save layout: {err}")),
+                            Ok(()) => self.say(format!("Keyboard layout: {code}")),
+                            Err(err) => self.fail(format!("Could not save layout: {err}")),
                         }
                     }
                 }
             }
+            Mode::Theme(modal) => match modal.handle_key(key) {
+                None => {}
+                Some(ThemeAction::Preview) => self.repaint = true,
+                Some(ThemeAction::Cancelled) => {
+                    self.mode = Mode::Editing;
+                    self.repaint = true;
+                }
+                Some(ThemeAction::Chosen(theme)) => {
+                    self.mode = Mode::Editing;
+                    match theme_config::save(&mut self.platform, theme) {
+                        Ok(()) => self.say(format!("Theme: {}", theme.name)),
+                        Err(err) => self.fail(format!("Could not save theme: {err}")),
+                    }
+                }
+            },
             Mode::Confirm(pending) => {
                 let pending = *pending;
                 match key {
@@ -270,7 +314,7 @@ impl<P: Platform> Editor<P> {
         match action {
             FileAction::Open(name) => match manager::load(&mut self.platform, &name) {
                 Ok(buffer) => self.buffer = buffer,
-                Err(err) => self.message = Some(format!("Could not open {name}: {err}")),
+                Err(err) => self.fail(format!("Could not open {name}: {err}")),
             },
             FileAction::Create(name) => {
                 let mut buffer = TextBuffer::new();
@@ -278,9 +322,9 @@ impl<P: Platform> Editor<P> {
                 match manager::save(&mut self.platform, &mut buffer) {
                     Ok(()) => {
                         self.buffer = buffer;
-                        self.message = Some(format!("Created {name}"));
+                        self.say(format!("Created {name}"));
                     }
-                    Err(err) => self.message = Some(format!("Could not create {name}: {err}")),
+                    Err(err) => self.fail(format!("Could not create {name}: {err}")),
                 }
             }
             FileAction::SaveAs(name) => {
@@ -315,7 +359,7 @@ impl<P: Platform> Editor<P> {
 
         match key {
             KeyEvent::Escape => {
-                self.message = Some("Ctrl+Q (or F10) quits, F1 shows help".to_string());
+                self.say("Ctrl+Q (or F10) quits, F1 shows help");
             }
             KeyEvent::Char(ch) => self.buffer.insert_char(ch),
             KeyEvent::Enter => self.buffer.insert_char('\n'),
@@ -332,17 +376,16 @@ impl<P: Platform> Editor<P> {
             KeyEvent::CtrlK if P::REMAP_KEYBOARD_LAYOUT => {
                 self.mode = Mode::Keyboard(KeyboardModal::new(self.keyboard.current()));
             }
-            KeyEvent::CtrlK => {
-                self.message = Some("This version uses your system's keyboard layout".to_string());
-            }
+            KeyEvent::CtrlK => self.say("This version uses your system's keyboard layout"),
+            KeyEvent::CtrlT => self.mode = Mode::Theme(ThemeModal::new()),
             KeyEvent::CtrlZ => {
                 if !self.buffer.undo() {
-                    self.message = Some("Nothing to undo".to_string());
+                    self.say("Nothing to undo");
                 }
             }
             KeyEvent::CtrlY => {
                 if !self.buffer.redo() {
-                    self.message = Some("Nothing to redo".to_string());
+                    self.say("Nothing to redo");
                 }
             }
             KeyEvent::CtrlB => self.buffer.toggle_wrap("**"),
@@ -403,7 +446,7 @@ impl<P: Platform> Editor<P> {
                     None => FileModal::new(files),
                 });
             }
-            Err(err) => self.message = Some(format!("Could not list files: {err}")),
+            Err(err) => self.fail(format!("Could not list files: {err}")),
         }
     }
 
@@ -420,13 +463,13 @@ impl<P: Platform> Editor<P> {
             .and_then(|()| manager::save(&mut self.platform, &mut self.buffer));
         match result {
             Ok(()) => {
-                self.message = Some(format!("Saved {}", file_name(self.buffer.file_path().unwrap_or(""))));
+                self.say(format!("Saved {}", file_name(self.buffer.file_path().unwrap_or(""))));
                 if let Some(pending) = self.after_save.take() {
                     self.perform(pending);
                 }
             }
             Err(err) => {
-                self.message = Some(format!("Save failed: {err}"));
+                self.fail(format!("Save failed: {err}"));
                 self.after_save = None;
             }
         }

@@ -113,6 +113,16 @@ impl MarkdownLine {
     }
 }
 
+/// The kind of formatted text a span holds (or a marker belongs to).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Emphasis {
+    Heading,
+    Bold,
+    Italic,
+    /// `***text***`
+    BoldItalic,
+}
+
 /// How a span of source text should be highlighted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpanKind {
@@ -120,45 +130,68 @@ pub enum SpanKind {
     Heading,
     Bold,
     Italic,
+    BoldItalic,
+    /// The `#`, `*`, `**`, `***` or `_` characters around formatted text.
+    Marker(Emphasis),
 }
 
-/// Split `line` into highlighted spans **including** the markdown markers,
-/// so the concatenated spans equal the input and screen columns match
-/// cursor columns. Unclosed markers are left as plain text.
+impl Emphasis {
+    /// The kind of the text the marker surrounds.
+    pub fn span(self) -> SpanKind {
+        match self {
+            Emphasis::Heading => SpanKind::Heading,
+            Emphasis::Bold => SpanKind::Bold,
+            Emphasis::Italic => SpanKind::Italic,
+            Emphasis::BoldItalic => SpanKind::BoldItalic,
+        }
+    }
+}
+
+/// Split `line` into highlighted spans **including** the markdown markers
+/// (as `Marker` spans), so the concatenated spans equal the input and screen
+/// columns match cursor columns. Unclosed markers are left as plain text.
 pub fn highlight(line: &str) -> Vec<(SpanKind, &str)> {
-    if MarkdownParser::get_heading_level(line).is_some() {
-        return alloc::vec![(SpanKind::Heading, line)];
+    if let Some(level) = MarkdownParser::get_heading_level(line) {
+        let (marker, text) = line.split_at(usize::from(level));
+        return alloc::vec![(SpanKind::Marker(Emphasis::Heading), marker), (SpanKind::Heading, text)];
     }
 
     let mut spans = Vec::new();
     let mut plain_start = 0;
     let mut i = 0;
-    while i < line.len() {
+    'scan: while i < line.len() {
         let rest = &line[i..];
-        let (marker, kind) = if rest.starts_with("**") {
-            ("**", SpanKind::Bold)
-        } else if rest.starts_with('*') {
-            ("*", SpanKind::Italic)
+        let candidates: &[(&str, Emphasis)] = if rest.starts_with('*') {
+            &[("***", Emphasis::BoldItalic), ("**", Emphasis::Bold), ("*", Emphasis::Italic)]
         } else if rest.starts_with('_') {
-            ("_", SpanKind::Italic)
+            &[("_", Emphasis::Italic)]
         } else {
             i += rest.chars().next().map_or(1, char::len_utf8);
             continue;
         };
 
-        let body = &rest[marker.len()..];
-        match body.find(marker) {
-            Some(close) if close > 0 => {
+        // The longest marker that has a closing partner with text between.
+        for &(marker, emphasis) in candidates {
+            if !rest.starts_with(marker) {
+                continue;
+            }
+            let body = &rest[marker.len()..];
+            if let Some(close) = body.find(marker).filter(|&c| c > 0) {
                 if plain_start < i {
                     spans.push((SpanKind::Plain, &line[plain_start..i]));
                 }
-                let end = i + marker.len() * 2 + close;
-                spans.push((kind, &line[i..end]));
+                let text_end = i + marker.len() + close;
+                let end = text_end + marker.len();
+                spans.push((SpanKind::Marker(emphasis), &line[i..i + marker.len()]));
+                spans.push((emphasis.span(), &line[i + marker.len()..text_end]));
+                spans.push((SpanKind::Marker(emphasis), &line[text_end..end]));
                 i = end;
                 plain_start = end;
+                continue 'scan;
             }
-            _ => i += marker.len(),
         }
+        // Unmatched: skip the whole marker run so `**` isn't retried as `*`.
+        i += rest.len() - rest.trim_start_matches(rest.as_bytes()[0] as char).len();
     }
     if plain_start < line.len() || spans.is_empty() {
         spans.push((SpanKind::Plain, &line[plain_start..]));
@@ -226,14 +259,57 @@ mod tests {
         assert!(matches!(line.tokens[2], MarkdownToken::PlainText(_)));
     }
 
+    use SpanKind::{Marker, Plain};
+
+    fn joined(spans: &[(SpanKind, &str)]) -> String {
+        spans.iter().map(|(_, t)| *t).collect()
+    }
+
     #[test]
-    fn highlight_keeps_markers() {
-        let line = "a **bold** and *it* plus *open é";
-        let spans = highlight(line);
-        let joined: String = spans.iter().map(|(_, t)| *t).collect();
-        assert_eq!(joined, line);
-        assert!(spans.contains(&(SpanKind::Bold, "**bold**")));
-        assert!(spans.contains(&(SpanKind::Italic, "*it*")));
-        assert_eq!(highlight("## Title"), [(SpanKind::Heading, "## Title")]);
+    fn highlight_headings() {
+        assert_eq!(highlight("## Title"), [(Marker(Emphasis::Heading), "##"), (SpanKind::Heading, " Title")]);
+        // Not headings: no space, or more than six #.
+        assert_eq!(highlight("#tag"), [(Plain, "#tag")]);
+        assert_eq!(highlight("####### x"), [(Plain, "####### x")]);
+    }
+
+    #[test]
+    fn highlight_emphasis_with_markers() {
+        assert_eq!(
+            highlight("a *it* b"),
+            [(Plain, "a "), (Marker(Emphasis::Italic), "*"), (SpanKind::Italic, "it"), (Marker(Emphasis::Italic), "*"), (Plain, " b")]
+        );
+        assert_eq!(
+            highlight("**bold**"),
+            [(Marker(Emphasis::Bold), "**"), (SpanKind::Bold, "bold"), (Marker(Emphasis::Bold), "**")]
+        );
+        assert_eq!(
+            highlight("***both***!"),
+            [
+                (Marker(Emphasis::BoldItalic), "***"),
+                (SpanKind::BoldItalic, "both"),
+                (Marker(Emphasis::BoldItalic), "***"),
+                (Plain, "!"),
+            ]
+        );
+        assert_eq!(highlight("_u_")[1], (SpanKind::Italic, "u"));
+    }
+
+    #[test]
+    fn highlight_unmatched_markers_stay_plain() {
+        for line in ["*open é", "a ** b", "x * y", "**", "*"] {
+            assert_eq!(highlight(line), [(Plain, line)], "{line}");
+        }
+        // An unclosed `***` falls back to the longest marker that closes.
+        assert_eq!(
+            highlight("***a**"),
+            [(Marker(Emphasis::Bold), "**"), (SpanKind::Bold, "*a"), (Marker(Emphasis::Bold), "**")]
+        );
+    }
+
+    #[test]
+    fn highlight_spans_concatenate_to_input() {
+        let line = "a **bold** and *it* plus ***bi*** and *open é ## x";
+        assert_eq!(joined(&highlight(line)), line);
     }
 }

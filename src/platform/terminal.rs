@@ -45,6 +45,7 @@ fn map_key(key: event::KeyEvent) -> Option<KeyEvent> {
             'k' => KeyEvent::CtrlK,
             'z' => KeyEvent::CtrlZ,
             'y' => KeyEvent::CtrlY,
+            't' => KeyEvent::CtrlT,
             'q' => KeyEvent::CtrlQ,
             _ => return None,
         },
@@ -78,6 +79,7 @@ fn map_key(key: event::KeyEvent) -> Option<KeyEvent> {
         KeyCode::F(3) => KeyEvent::CtrlL,
         KeyCode::F(4) => KeyEvent::CtrlN,
         KeyCode::F(5) => KeyEvent::CtrlK,
+        KeyCode::F(6) => KeyEvent::CtrlT,
         KeyCode::F(10) => KeyEvent::CtrlQ,
         _ => return None,
     })

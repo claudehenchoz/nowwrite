@@ -1,12 +1,13 @@
 use crate::config::keyboard::{KeyboardLayout, LAYOUTS};
 use crate::platform::{FileInfo, KeyEvent};
+use super::theme::{self, Theme, THEMES};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::{Margin, Position, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 const INVALID_NAME_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
@@ -117,9 +118,7 @@ impl FileModal {
 
         let area = super::centered(frame.area(), 60, 16);
         frame.render_widget(Clear, area);
-        let block = Block::bordered()
-            .title(Line::from(" NowWrite - Select File ").centered().style(super::bright()))
-            .title_bottom(Line::from(" ↑↓ Select  Enter Open  Ctrl+N/F4 New  F1 Help ").centered());
+        let block = super::dialog_block(" NowWrite - Select File ", " ↑↓ Select  Enter Open  Ctrl+N/F4 New  F1 Help ");
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -133,7 +132,14 @@ impl FileModal {
             frame.render_widget(Paragraph::new(text), inner);
             return None;
         }
-        let items: Vec<ListItem> = self.files.iter().map(|f| ListItem::new(f.name.as_str())).collect();
+        let items: Vec<ListItem> = self
+            .files
+            .iter()
+            .map(|f| {
+                let item = ListItem::new(f.name.as_str());
+                if f.is_directory { item.style(super::directory()) } else { item }
+            })
+            .collect();
         render_list(frame, inner, items, self.selected);
         None
     }
@@ -145,9 +151,7 @@ impl FileModal {
             NamePurpose::Create => (" New Document ", " Enter Create  Esc Cancel "),
             NamePurpose::SaveAs => (" Save As ", " Enter Save  Esc Cancel "),
         };
-        let block = Block::bordered()
-            .title(Line::from(title).centered().style(super::bright()))
-            .title_bottom(Line::from(hint).centered());
+        let block = super::dialog_block(title, hint);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -159,7 +163,7 @@ impl FileModal {
         let mut text = vec![Line::from(name_line)];
         if let Some(error) = &self.error {
             text.push(Line::from(""));
-            text.push(Line::from(Span::styled(format!(" {error}"), super::bright())));
+            text.push(Line::from(Span::styled(format!(" {error}"), super::error())));
         }
         frame.render_widget(Paragraph::new(text), inner);
 
@@ -194,9 +198,7 @@ impl KeyboardModal {
     pub fn render(&self, frame: &mut Frame) {
         let area = super::centered(frame.area(), 50, LAYOUTS.len() as u16 + 4);
         frame.render_widget(Clear, area);
-        let block = Block::bordered()
-            .title(Line::from(" Keyboard Layout ").centered().style(super::bright()))
-            .title_bottom(Line::from(" ↑↓ Select  Enter Choose  Esc Cancel ").centered());
+        let block = super::dialog_block(" Keyboard Layout ", " ↑↓ Select  Enter Choose  Esc Cancel ");
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -208,14 +210,84 @@ impl KeyboardModal {
     }
 }
 
+/// What the theme picker did with a key.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ThemeAction {
+    /// The highlighted theme is now active (live preview).
+    Preview,
+    /// Keep this theme.
+    Chosen(&'static Theme),
+    /// The theme active when the box opened has been restored.
+    Cancelled,
+}
+
+/// Lets the user pick a theme, previewing each one live.
+pub struct ThemeModal {
+    selected: usize,
+    /// Restored on Esc.
+    original: usize,
+}
+
+impl Default for ThemeModal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ThemeModal {
+    pub fn new() -> Self {
+        let current = theme::current_index();
+        Self { selected: current, original: current }
+    }
+
+    pub fn handle_key(&mut self, key: KeyEvent) -> Option<ThemeAction> {
+        let target = match key {
+            KeyEvent::Up => self.selected.checked_sub(1)?,
+            KeyEvent::Down if self.selected + 1 < THEMES.len() => self.selected + 1,
+            KeyEvent::Enter => return Some(ThemeAction::Chosen(&THEMES[self.selected])),
+            KeyEvent::Escape => {
+                theme::set_current(self.original);
+                return Some(ThemeAction::Cancelled);
+            }
+            _ => return None,
+        };
+        self.selected = target;
+        theme::set_current(target);
+        Some(ThemeAction::Preview)
+    }
+
+    pub fn render(&self, frame: &mut Frame) {
+        let area = super::centered(frame.area(), 44, THEMES.len() as u16 + 4);
+        frame.render_widget(Clear, area);
+        let block = super::dialog_block(" Theme ", " ↑↓ Preview  Enter Choose  Esc Cancel ");
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let lines: Vec<Line> = THEMES
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let row = if i == self.selected { super::dialog_selected() } else { super::dialog() };
+                let mark = if i == self.selected { "> " } else { "  " };
+                let mut spans = vec![Span::styled(format!("{mark}{:<17}", t.name), row)];
+                for color in [t.background, t.text, t.heading, t.bold, t.italic] {
+                    spans.push(Span::styled(" ", row));
+                    spans.push(Span::styled("██", row.fg(color)));
+                }
+                spans.push(Span::styled(" ", row));
+                Line::from(spans)
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(lines), inner.inner(Margin::new(1, 0)));
+    }
+}
+
 /// "Save changes?" prompt shown before the document would be replaced or
 /// the editor closed.
 pub fn render_confirm(frame: &mut Frame, document: &str) {
     let area = super::centered(frame.area(), 54, 6);
     frame.render_widget(Clear, area);
-    let block = Block::bordered()
-        .title(Line::from(" Unsaved Changes ").centered().style(super::bright()))
-        .title_bottom(Line::from(" S Save  D Discard  Esc Cancel ").centered());
+    let block = super::dialog_block(" Unsaved Changes ", " S Save  D Discard  Esc Cancel ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let text = vec![
@@ -230,14 +302,15 @@ pub fn render_confirm(frame: &mut Frame, document: &str) {
 /// `layout` is the active layout code where NowWrite applies layouts itself.
 pub fn render_help(frame: &mut Frame, layout: Option<&str>) {
     let mut text = vec![
-        Line::from(Span::styled(" NowWrite - distraction-free Markdown editor", super::bright())),
+        Line::from(Span::styled(" NowWrite - distraction-free Markdown editor", super::dialog_title())),
         Line::from(""),
         Line::from(" Ctrl+S  F2   Save                 Ctrl+Z  Undo"),
         Line::from(" Ctrl+L  F3   Open document        Ctrl+Y  Redo"),
         Line::from(" Ctrl+N  F4   New document         Ctrl+B  Bold on/off"),
         Line::from(" Ctrl+K  F5   Keyboard layout      Ctrl+I  Italic on/off"),
-        Line::from(" Ctrl+Q  F10  Quit                 Shift+Arrows  Select"),
-        Line::from(" F1           This help            Esc     Close a box"),
+        Line::from(" Ctrl+T  F6   Theme                Shift+Arrows  Select"),
+        Line::from(" Ctrl+Q  F10  Quit                 Esc     Close a box"),
+        Line::from(" F1           This help"),
         Line::from(" Ctrl+Left/Right  Move by word (add Shift to select)"),
         Line::from(""),
         Line::from(" Use the F-keys if your computer ignores Ctrl shortcuts."),
@@ -261,9 +334,7 @@ pub fn render_help(frame: &mut Frame, layout: Option<&str>) {
     let height = text.len() as u16 + 2;
     let area = super::centered(frame.area(), 66, height);
     frame.render_widget(Clear, area);
-    let block = Block::bordered()
-        .title(Line::from(" Help ").centered().style(super::bright()))
-        .title_bottom(Line::from(" Press any key to close ").centered());
+    let block = super::dialog_block(" Help ", " Press any key to close ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(text), inner);
@@ -271,8 +342,38 @@ pub fn render_help(frame: &mut Frame, layout: Option<&str>) {
 
 fn render_list(frame: &mut Frame, area: Rect, items: Vec<ListItem>, selected: usize) {
     let list = List::new(items)
-        .highlight_style(super::selected())
+        .highlight_style(super::dialog_selected())
         .highlight_symbol("> ");
     let mut state = ListState::default().with_selected(Some(selected));
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::theme::{current, TEST_LOCK};
+
+    #[test]
+    fn theme_picker_previews_and_esc_restores() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        theme::set_current(1);
+        let mut modal = ThemeModal::new();
+        assert_eq!(modal.handle_key(KeyEvent::Down), Some(ThemeAction::Preview));
+        assert_eq!(current().id, "paper");
+        assert_eq!(modal.handle_key(KeyEvent::Up), Some(ThemeAction::Preview));
+        assert_eq!(modal.handle_key(KeyEvent::Up), Some(ThemeAction::Preview));
+        assert_eq!(current().id, "classic");
+        // Already at the top: nothing changes.
+        assert_eq!(modal.handle_key(KeyEvent::Up), None);
+        assert_eq!(modal.handle_key(KeyEvent::Char('x')), None);
+        assert_eq!(modal.handle_key(KeyEvent::Escape), Some(ThemeAction::Cancelled));
+        assert_eq!(current().id, "nocturne");
+
+        let mut modal = ThemeModal::new();
+        modal.handle_key(KeyEvent::Down);
+        modal.handle_key(KeyEvent::Down);
+        assert_eq!(modal.handle_key(KeyEvent::Enter), Some(ThemeAction::Chosen(&THEMES[3])));
+        assert_eq!(current().id, "amber");
+        theme::set_current(1);
+    }
 }

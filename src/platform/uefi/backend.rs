@@ -1,13 +1,13 @@
 //! ratatui backend over the UEFI Simple Text Output protocol.
 
 use crate::error::{Error, Result};
+use crate::ui::theme;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use ratatui::backend::{Backend, ClearType, WindowSize};
 use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Size};
-use ratatui::style::{Color as TuiColor, Modifier};
 use uefi::proto::console::text::Color;
 use uefi::{system, CString16};
 
@@ -31,7 +31,8 @@ impl UefiBackend {
             }
             // The editor draws its own cursor (Platform::SOFTWARE_CURSOR).
             let _ = out.enable_cursor(false);
-            out.set_color(Color::LightGray, Color::Black).map_err(uefi_err)?;
+            let (fg, bg) = base_colors();
+            out.set_color(fg, bg).map_err(uefi_err)?;
             out.clear().map_err(uefi_err)?;
             let mode = out
                 .current_mode()
@@ -45,29 +46,40 @@ impl UefiBackend {
     }
 }
 
-/// Map ratatui styles onto the console's 16 foreground / 8 background
-/// colors. Any background becomes light grey with black text; bright or
-/// bold text becomes white, dark grey stays dark grey.
+/// UEFI console colours in attribute order (index = VGA palette index).
+const CONSOLE: [Color; 16] = [
+    Color::Black, Color::Blue, Color::Green, Color::Cyan,
+    Color::Red, Color::Magenta, Color::Brown, Color::LightGray,
+    Color::DarkGray, Color::LightBlue, Color::LightGreen, Color::LightCyan,
+    Color::LightRed, Color::LightMagenta, Color::Yellow, Color::White,
+];
+
+/// Map a cell's theme colours onto the console's 16 foreground / 8
+/// background colours (see `theme::console_colors`).
 fn colors(cell: &Cell) -> (Color, Color) {
-    if !matches!(cell.bg, TuiColor::Reset | TuiColor::Black) {
-        return (Color::Black, Color::LightGray);
-    }
-    let fg = if cell.fg == TuiColor::DarkGray {
-        Color::DarkGray
-    } else if cell.modifier.contains(Modifier::BOLD)
-        || matches!(cell.fg, TuiColor::White | TuiColor::LightYellow | TuiColor::LightCyan)
-    {
-        Color::White
-    } else {
-        Color::LightGray
-    };
-    (fg, Color::Black)
+    let (fg, bg) = theme::console_colors(cell.fg, cell.bg, theme::current());
+    (CONSOLE[usize::from(fg)], CONSOLE[usize::from(bg & 7)])
 }
 
-/// UEFI text output is UCS-2: replace anything outside the BMP.
+/// The theme's plain text colours, for clearing the screen.
+fn base_colors() -> (Color, Color) {
+    let t = theme::current();
+    let (fg, bg) = theme::console_colors(t.text, t.background, t);
+    (CONSOLE[usize::from(fg)], CONSOLE[usize::from(bg & 7)])
+}
+
+/// UEFI text output is UCS-2: replace anything outside the BMP. The
+/// firmware font lacks rounded corners, so use square ones.
 fn push_ucs2(out: &mut String, symbol: &str) {
     for ch in symbol.chars() {
-        out.push(if (ch as u32) <= 0xFFFF && !ch.is_control() { ch } else { '?' });
+        out.push(match ch {
+            '╭' => '┌',
+            '╮' => '┐',
+            '╰' => '└',
+            '╯' => '┘',
+            c if (c as u32) <= 0xFFFF && !c.is_control() => c,
+            _ => '?',
+        });
     }
 }
 
@@ -150,8 +162,9 @@ impl Backend for UefiBackend {
     }
 
     fn clear(&mut self) -> Result<()> {
+        let (fg, bg) = base_colors();
         system::with_stdout(|out| {
-            out.set_color(Color::LightGray, Color::Black)?;
+            out.set_color(fg, bg)?;
             out.clear()
         })
         .map_err(uefi_err)?;

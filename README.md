@@ -78,6 +78,7 @@ sudo ./scripts/create-boot-drive.sh /dev/sdX NOWWRITE
 | Ctrl+L | F3 | Open a document |
 | Ctrl+N | F4 | New document (asks for a name) |
 | Ctrl+K | F5 | Change keyboard layout (UEFI version) |
+| Ctrl+T | F6 | Choose a theme (↑↓ previews it live, Enter keeps it, Esc goes back) |
 | Ctrl+B | | Bold on/off for the word or selection (`**`) |
 | Ctrl+I | | Italic on/off for the word or selection (`*`) |
 | Ctrl+Z / Ctrl+Y | | Undo / redo (word by word) |

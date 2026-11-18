@@ -7,7 +7,8 @@ use crate::editor::markdown::{highlight, SpanKind};
 use alloc::string::String;
 use alloc::vec::Vec;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::Style;
+use super::theme;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
@@ -145,7 +146,7 @@ impl EditorView {
             let (_, chars, styles) = cached.as_ref().unwrap();
             lines.push(styled_line(&chars[row.start..row.end], &styles[row.start..row.end]));
         }
-        frame.render_widget(Paragraph::new(lines), area);
+        frame.render_widget(Paragraph::new(lines).style(super::base()), area);
 
         let x = area.x + cursor_x as u16;
         let y = area.y + (cursor_index - self.scroll) as u16;
@@ -163,8 +164,10 @@ fn char_styles(text: &str, line: usize, selection: Option<Selection>) -> Vec<Sty
         if (start.line..=end.line).contains(&line) {
             let from = if line == start.line { start.column } else { 0 };
             let to = if line == end.line { end.column } else { styles.len() };
+            // Keep bold/italic, but use the selection colours.
+            let selected = super::selection();
             for style in styles.iter_mut().take(to).skip(from) {
-                *style = super::selected();
+                *style = style.patch(selected);
             }
         }
     }
@@ -192,8 +195,17 @@ fn styled_line(chars: &[char], styles: &[Style]) -> Line<'static> {
 fn style_for(kind: SpanKind) -> Style {
     match kind {
         SpanKind::Plain => Style::new(),
-        SpanKind::Heading | SpanKind::Bold => super::bright(),
+        SpanKind::Heading => super::heading(),
+        SpanKind::Bold => super::bold(),
         SpanKind::Italic => super::italic(),
+        SpanKind::BoldItalic => super::bold().add_modifier(Modifier::ITALIC),
+        SpanKind::Marker(of) => {
+            let span = style_for(of.span());
+            match theme::current().marker {
+                Some(color) => span.fg(color),
+                None => span,
+            }
+        }
     }
 }
 

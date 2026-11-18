@@ -150,6 +150,7 @@ fn map_key(key: Key, shift_state: u32) -> Option<KeyEvent> {
             ScanCode::FUNCTION_3 => KeyEvent::CtrlL,
             ScanCode::FUNCTION_4 => KeyEvent::CtrlN,
             ScanCode::FUNCTION_5 => KeyEvent::CtrlK,
+            ScanCode::FUNCTION_6 => KeyEvent::CtrlT,
             ScanCode::FUNCTION_10 => KeyEvent::CtrlQ,
             _ => return None,
         }),
@@ -166,6 +167,7 @@ fn ctrl_letter(ch: char) -> Option<KeyEvent> {
         'k' => KeyEvent::CtrlK,
         'z' => KeyEvent::CtrlZ,
         'y' => KeyEvent::CtrlY,
+        't' => KeyEvent::CtrlT,
         'q' => KeyEvent::CtrlQ,
         _ => return None,
     })

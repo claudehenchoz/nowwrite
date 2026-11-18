@@ -135,4 +135,7 @@ The features are mutually exclusive. UEFI builds need `--no-default-features --f
 
 ## License
 
+NowWrite embeds the [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) font (in `assets/fonts/`) for its UEFI graphics mode. The font is licensed under the SIL Open Font License 1.1 (no Reserved Font Name); see `assets/fonts/OFL.txt`, which the build scripts also copy next to the EFI file.
+
+
 This project is designed as a reference implementation of a UEFI-native text editor. Feel free to modify and extend as needed.

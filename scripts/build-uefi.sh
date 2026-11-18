@@ -13,5 +13,7 @@ echo "UEFI build complete: output/NowWrite.efi"
 if [ "$1" = "--create-boot" ]; then
     mkdir -p output/boot/EFI/BOOT
     cp output/NowWrite.efi output/boot/EFI/BOOT/BOOTX64.EFI
+    # The embedded JetBrains Mono font's licence travels with the binary.
+    cp assets/fonts/OFL.txt output/boot/EFI/BOOT/OFL.txt
     echo "Boot layout created in output/boot/ (copy its contents to a FAT32 drive)"
 fi

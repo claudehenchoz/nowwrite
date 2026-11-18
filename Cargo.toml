@@ -34,3 +34,6 @@ uefi = ["dep:uefi"]
 opt-level = "z"
 lto = true
 codegen-units = 1
+
+[build-dependencies]
+fontdue = "0.9.5"

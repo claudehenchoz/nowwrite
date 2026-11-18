@@ -13,6 +13,7 @@ pub mod config;
 pub mod editor;
 pub mod error;
 pub mod file;
+pub mod font;
 pub mod platform;
 pub mod ui;
 

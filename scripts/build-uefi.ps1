@@ -15,5 +15,7 @@ Write-Host "UEFI build complete: output\NowWrite.efi"
 if ($CreateBoot) {
     New-Item -ItemType Directory -Force output\boot\EFI\BOOT | Out-Null
     Copy-Item output\NowWrite.efi output\boot\EFI\BOOT\BOOTX64.EFI -Force -ErrorAction Stop
+    # The embedded JetBrains Mono font's licence travels with the binary.
+    Copy-Item assets\fonts\OFL.txt output\boot\EFI\BOOT\OFL.txt -Force -ErrorAction Stop
     Write-Host "Boot layout created in output\boot\ (copy its contents to a FAT32 drive)"
 }

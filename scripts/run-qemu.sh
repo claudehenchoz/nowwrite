@@ -14,23 +14,72 @@
 #   Debian/Ubuntu: sudo apt install qemu-system-x86 ovmf
 #   Fedora:        sudo dnf install qemu-system-x86 edk2-ovmf
 #
-# Usage: ./scripts/run-qemu.sh [--ovmf FILE] [--size-mb N] [-- extra qemu args...]
-#   e.g. ./scripts/run-qemu.sh -- -display none -monitor tcp:127.0.0.1:4444,server,nowait
+# Usage: ./scripts/run-qemu.sh [--resolution PRESET|WxH] [--ovmf FILE] [--size-mb N] [-- extra qemu args...]
+#   e.g. ./scripts/run-qemu.sh --resolution fhd
+#        ./scripts/run-qemu.sh -r 1600x900
+#        ./scripts/run-qemu.sh -- -display none -monitor tcp:127.0.0.1:4444,server,nowait
+#
+# --resolution sets the screen size the firmware starts in (QEMU's default
+# is 1280x800). Presets (--resolution list prints them):
+#   vga 640x480, svga 800x600   below 1024x768: NowWrite switches to a larger mode
+#   xga 1024x768                smallest size NowWrite keeps as is
+#   wxga 1280x800               QEMU's default
+#   hd 1360x768                 budget laptop panel (1366x768 ones report 1360)
+#   fhd 1920x1080, wuxga 1920x1200
+#   qhd 2560x1440               above NowWrite's 1920x1200 switch limit
 set -euo pipefail
 
 OVMF=""
 SIZE_MB=64
+RESOLUTION=""
 QEMU_ARGS=()
+
+PRESETS="vga=640x480 svga=800x600 xga=1024x768 wxga=1280x800 hd=1360x768 fhd=1920x1080 wuxga=1920x1200 qhd=2560x1440"
+
+list_presets() {
+    for p in $PRESETS; do printf '  %-6s %s\n' "${p%%=*}" "${p#*=}"; done
+}
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --ovmf) OVMF="$2"; shift 2 ;;
         --size-mb) SIZE_MB="$2"; shift 2 ;;
+        -r|--resolution) RESOLUTION="$2"; shift 2 ;;
         --) shift; QEMU_ARGS=("$@"); break ;;
-        -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown argument: $1 (put QEMU arguments after --)" >&2; exit 1 ;;
     esac
 done
+
+# Resolve --resolution to WIDTHxHEIGHT and the matching VGA device.
+DISPLAY_ARGS=()
+if [ -n "$RESOLUTION" ]; then
+    if [ "$RESOLUTION" = "list" ]; then
+        echo "Resolution presets (or pass any WIDTHxHEIGHT):"
+        list_presets
+        exit 0
+    fi
+    for p in $PRESETS; do
+        if [ "${p%%=*}" = "$RESOLUTION" ]; then RESOLUTION="${p#*=}"; fi
+    done
+    if ! [[ "$RESOLUTION" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+        echo "Unknown resolution '$RESOLUTION'. Use WIDTHxHEIGHT or one of:" >&2
+        list_presets >&2
+        exit 1
+    fi
+    XRES="${BASH_REMATCH[1]}"
+    YRES="${BASH_REMATCH[2]}"
+    # OVMF rounds the width down to a multiple of 8 but QEMU keeps the
+    # requested row length, which skews the picture. Round it ourselves.
+    if (( XRES % 8 != 0 )); then
+        echo "Note: using width $(( XRES / 8 * 8 )) instead of $XRES (QEMU/OVMF need a multiple of 8)."
+        XRES=$(( XRES / 8 * 8 ))
+    fi
+    RESOLUTION="${XRES}x${YRES}"
+    # The firmware starts in this mode (from the VGA device's EDID). 32 MiB
+    # of video memory covers everything up to 2560x1600 with room to spare.
+    DISPLAY_ARGS=(-vga none -device "VGA,vgamem_mb=32,xres=$XRES,yres=$YRES")
+fi
 
 EFI="output/NowWrite.efi"
 DRIVE="output/drive"
@@ -106,9 +155,9 @@ fi
 
 "$PYTHON" "$FATIMG" create "$IMAGE" "$DRIVE" --efi "$EFI" --size-mb "$SIZE_MB"
 
-echo "Booting NowWrite; documents are synced from/to $DRIVE"
+echo "Booting NowWrite${RESOLUTION:+ at $RESOLUTION}; documents are synced from/to $DRIVE"
 # Don't let a non-zero QEMU exit skip the sync back.
-"$QEMU" -machine q35 -m 256M "${ACCEL[@]}" "${FIRMWARE[@]}" \
+"$QEMU" -machine q35 -m 256M "${ACCEL[@]}" "${FIRMWARE[@]}" "${DISPLAY_ARGS[@]}" \
     -drive "format=raw,file=$IMAGE" -net none "${QEMU_ARGS[@]}" || true
 
 "$PYTHON" "$FATIMG" extract "$IMAGE" "$DRIVE" --skip EFI

@@ -60,6 +60,25 @@ Your test documents live in `output\drive\`, which is created on the first run. 
 
 It needs Python 3 (for `scripts\fatimg.py`, standard library only).
 
+To try other screen sizes, pass a resolution preset or any `WIDTHxHEIGHT`:
+
+```bash
+./scripts/run-qemu.sh --resolution fhd        # PowerShell: .\scripts\run-qemu.ps1 -Resolution fhd
+./scripts/run-qemu.sh -r 1600x900
+./scripts/run-qemu.sh --resolution list       # show the presets
+```
+
+| Preset | Size | What it shows |
+|--------|------|---------------|
+| `vga`, `svga` | 640x480, 800x600 | Firmware starts small; NowWrite switches to a larger mode |
+| `xga` | 1024x768 | Smallest size NowWrite keeps as is |
+| `wxga` | 1280x800 | QEMU's default |
+| `hd` | 1360x768 | Budget laptop panel (1366x768 panels report 1360 to firmware) |
+| `fhd`, `wuxga` | 1920x1080, 1920x1200 | Full HD |
+| `qhd` | 2560x1440 | Larger than NowWrite's 1920x1200 limit for switching modes |
+
+Widths that aren't a multiple of 8 are rounded down, because QEMU's firmware can't display them correctly. The first boot at a new resolution takes a few seconds longer.
+
 ### Create Bootable USB Drive
 
 ```bash

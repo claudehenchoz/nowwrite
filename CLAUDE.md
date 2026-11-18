@@ -116,7 +116,7 @@ The UEFI target has no SSE (soft-float), and the CPU is often cold when a key ar
 
 Don't use QEMU's `fat:rw:<dir>` drive: it doesn't reliably write changes back to the host.
 
-QEMU's default display gives OVMF 1280x800. Use `-- -vga none -device VGA,xres=1920,yres=1080` for a 1080p GOP mode, or `xres=800,yres=600` to exercise the mode switch.
+QEMU's default display gives OVMF 1280x800. `--resolution PRESET|WxH` (PowerShell `-Resolution`) starts the firmware at another size; `--resolution list` shows the presets (`svga` exercises the mode switch, `fhd` is 1080p, `qhd` is above the switch limit). It uses `-vga none -device VGA,vgamem_mb=32,xres=..,yres=..`. Widths must be multiples of 8: OVMF rounds the mode down but QEMU keeps the requested row length, which skews the screen (firmware logo included), so the scripts round down. The first boot after changing the VGA setup is slower (OVMF re-enumerates boot options), so headless drivers should wait ~10 s before the first screendump.
 
 Headless runs: `./scripts/run-qemu.sh -- -display none -monitor tcp:127.0.0.1:4444,server,nowait` (PowerShell: `-QemuArgs '-display','none','-monitor','tcp:127.0.0.1:4444,server,nowait'`). Drive them through the monitor:
 - `sendkey ctrl-s`, `sendkey f4` and similar send keys. `shift-right` arrives without Shift, but `shift-end`/`shift-home` select;

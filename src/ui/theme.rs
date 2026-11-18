@@ -280,8 +280,8 @@ pub fn nearest_vga(rgb: Rgb, limit: usize) -> u8 {
 /// any of the 16 colours for text, the first 8 for backgrounds.
 ///
 /// Highlighted backgrounds (selection, cursor, status bar, selected row)
-/// that would vanish into the main background become black on light grey,
-/// and text that would vanish into its background gets the most
+/// that would vanish into the main background become black on light grey
+/// (white on black for light themes), and text that would vanish into its background gets the most
 /// contrasting colour.
 pub fn console_colors(fg: Color, bg: Color, theme: &Theme) -> (u8, u8) {
     let main_bg = nearest_vga(to_rgb(theme.background, Color::Reset), 8);

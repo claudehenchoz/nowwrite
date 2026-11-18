@@ -1,8 +1,10 @@
-//! UEFI platform: text console, keyboard, and the FAT volume NowWrite was
-//! booted from.
+//! UEFI platform: graphics or text console, keyboard, and the FAT volume
+//! NowWrite was booted from.
 
 mod backend;
+mod gop;
 mod input;
+mod text;
 
 pub use backend::UefiBackend;
 
@@ -15,6 +17,9 @@ use input::UefiInput;
 use uefi::fs::{FileSystem, PathBuf};
 use uefi::proto::console::text::Color;
 use uefi::{boot, runtime, system, CString16};
+
+/// Contains `text` to force the text console (for firmware whose GOP is broken).
+const DISPLAY_CONFIG: &str = ".nowwrite/.display.config";
 
 pub struct UefiPlatform {
     fs: FileSystem,
@@ -45,10 +50,12 @@ impl Platform for UefiPlatform {
     const SOFTWARE_CURSOR: bool = true;
 
     fn init() -> Result<(Self, Self::Backend)> {
-        let backend = UefiBackend::new()?;
+        // The file system comes first: it holds the display setting.
         let fs = boot::get_image_file_system(boot::image_handle())
             .map_err(|e| Error::Io(format!("boot volume not accessible: {e:?}")))?;
-        let platform = Self { fs: FileSystem::new(fs), input: UefiInput::new()? };
+        let mut platform = Self { fs: FileSystem::new(fs), input: UefiInput::new()? };
+        let force_text = platform.read_file(DISPLAY_CONFIG).is_ok_and(|c| c.trim() == "text");
+        let backend = UefiBackend::new(force_text)?;
         Ok((platform, backend))
     }
 
@@ -128,8 +135,13 @@ impl Platform for UefiPlatform {
 
 impl Drop for UefiPlatform {
     fn drop(&mut self) {
-        // Leave the console in its default state for the firmware.
+        // Leave the console in its default state for the firmware. Setting
+        // the text mode again also makes the firmware's console take the
+        // screen back from graphics mode (and its resolution, if changed).
         let _ = system::with_stdout(|out| -> uefi::Result {
+            if let Ok(Some(mode)) = out.current_mode() {
+                let _ = out.set_mode(mode);
+            }
             out.set_color(Color::LightGray, Color::Black)?;
             out.clear()?;
             // Some consoles don't support toggling the cursor; that's fine.

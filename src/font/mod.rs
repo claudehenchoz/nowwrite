@@ -2,6 +2,7 @@
 //! pixel sizes, four styles). Lookups binary-search the blob in place; there
 //! is no parsing beyond reading fixed-size records.
 
+pub mod boxdraw;
 #[cfg(test)]
 mod writer;
 

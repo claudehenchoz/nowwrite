@@ -4,7 +4,9 @@ A minimalist, distraction-free markdown editor that runs directly from UEFI firm
 
 ## Features
 
-- **Distraction-free editing**: Pure text-mode interface focused on writing
+- **Distraction-free editing**: A full-screen, keyboard-only interface focused on writing
+- **Crisp graphics on UEFI**: Anti-aliased JetBrains Mono with real bold and italic, falling back to the firmware's text console where graphics aren't available
+- **Themes**: Five built-in colour themes (Ctrl+T), previewed live
 - **UEFI-native**: Boots directly from firmware, no OS required
 - **Automatic backups**: Every 5 minutes and on manual save
 - **Markdown support**: Basic syntax highlighting for headings, bold, and italic
@@ -89,6 +91,24 @@ Opening, creating or quitting with unsaved changes asks whether to save first. L
 
 The F-keys exist because some firmware doesn't report Ctrl key combinations.
 
+## Themes and Display
+
+Ctrl+T (or F6) opens the theme picker. Moving through the list switches the whole screen to that theme at once. Enter keeps it, and Esc goes back to the theme you had. The choice is saved in `.nowwrite/.theme.config`.
+
+| Theme | Look |
+|-------|------|
+| Nocturne (default) | Deep blue-black with soft lavender headings, gold bold and violet italics |
+| Classic | The original grey-on-black text console |
+| Paper | Dark ink on warm off-white |
+| Amber CRT | Amber on near-black, like an old terminal |
+| Green Phosphor | Green on black |
+
+On UEFI, NowWrite draws its own pixels when the firmware offers graphics output (GOP): 24-bit colour, the JetBrains Mono font with real bold and italic, and characters such as `€` and curly quotes. It keeps the firmware's resolution, unless that's below 1024x768. In that case it switches to the largest mode up to 1920x1200, then picks the biggest font size that still fits 80x25 characters.
+
+Without graphics output it falls back to the firmware's text console, and maps each theme to the 16 colours that console offers. To force the text console (e.g. if graphics look wrong on your machine), put a file `.nowwrite/.display.config` containing the word `text` on the drive.
+
+The terminal version uses the same themes in 24-bit colour, in terminals that support it.
+
 The keyboard layout setting (Ctrl+K) only applies to the UEFI version. Firmware always reports US-layout characters, so NowWrite remaps them itself. That covers shifted keys, AltGr characters (`@ # | € [ ] { }`) and dead keys (`` ^ ` ´ ¨ ~ ``, e.g. `^` then `e` gives `ê`). In a terminal, the operating system's own layout is used.
 
 Firmware doesn't report the key left of `Y` on Swiss keyboards, so with de-CH use **AltGr+`,`** for `<`, **AltGr+`.`** for `>` and **AltGr+`-`** for `\`.
@@ -96,7 +116,7 @@ Firmware doesn't report the key left of `Y` on Swiss keyboards, so with de-CH us
 ## Architecture
 
 - **Core library** (`src/lib.rs`): the editor, UI and file handling. It is `no_std` + `alloc`, so the same code runs under UEFI.
-- **UI**: [ratatui](https://ratatui.rs) widgets. It uses ratatui's crossterm backend in a terminal and a custom backend over the UEFI text console.
+- **UI**: [ratatui](https://ratatui.rs) widgets. A terminal uses ratatui's crossterm backend. On UEFI, a custom backend draws pixels through GOP with a font baked in at build time (`build.rs`), or falls back to the text console.
 - **Platform layer**: `terminal` (crossterm and `std::fs`) and `uefi` (text console, keyboard, and the FAT volume NowWrite booted from).
 
 ## File Structure
@@ -107,6 +127,8 @@ Documents live in the root of the boot drive (UEFI) or the current directory (te
 *.md                 # Your markdown files
 .nowwrite/           # Configuration and backups
 ├── .keyboard.config
+├── .theme.config
+├── .display.config  # optional: "text" forces the text console
 ├── document.md.20240315_143022.bak
 └── ...
 ```

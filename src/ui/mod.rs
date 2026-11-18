@@ -5,15 +5,22 @@ pub mod status_bar;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 
-// The palette is limited to what the UEFI text console can show:
-// default/grey text, bright white, and one grey background.
+// The palette is limited to what the UEFI text console can show: default
+// grey text, bright white, dark grey (hints), and one grey background, which
+// is reserved for the status bar, selection and the software cursor.
 
 pub fn bright() -> Style {
     Style::new().fg(Color::White).add_modifier(Modifier::BOLD)
 }
 
+/// Italic shows as bright text (the UEFI console has no italics), like bold.
 pub fn italic() -> Style {
-    Style::new().bg(Color::DarkGray)
+    Style::new().fg(Color::White).add_modifier(Modifier::ITALIC)
+}
+
+/// De-emphasized text such as hints.
+pub fn muted() -> Style {
+    Style::new().fg(Color::DarkGray)
 }
 
 pub fn bar() -> Style {

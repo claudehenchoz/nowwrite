@@ -47,14 +47,21 @@ impl UefiBackend {
 
 /// Map ratatui styles onto the console's 16 foreground / 8 background
 /// colors. Any background becomes light grey with black text; bright or
-/// bold text becomes white.
+/// bold text becomes white, dark grey stays dark grey.
 fn colors(cell: &Cell) -> (Color, Color) {
     if !matches!(cell.bg, TuiColor::Reset | TuiColor::Black) {
         return (Color::Black, Color::LightGray);
     }
-    let bright = cell.modifier.contains(Modifier::BOLD)
-        || matches!(cell.fg, TuiColor::White | TuiColor::LightYellow | TuiColor::LightCyan);
-    (if bright { Color::White } else { Color::LightGray }, Color::Black)
+    let fg = if cell.fg == TuiColor::DarkGray {
+        Color::DarkGray
+    } else if cell.modifier.contains(Modifier::BOLD)
+        || matches!(cell.fg, TuiColor::White | TuiColor::LightYellow | TuiColor::LightCyan)
+    {
+        Color::White
+    } else {
+        Color::LightGray
+    };
+    (fg, Color::Black)
 }
 
 /// UEFI text output is UCS-2: replace anything outside the BMP.

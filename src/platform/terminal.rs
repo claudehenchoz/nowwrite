@@ -33,6 +33,7 @@ fn map_key(key: event::KeyEvent) -> Option<KeyEvent> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     // AltGr arrives as Ctrl+Alt on Windows; treat those as plain characters.
     let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
     Some(match key.code {
         KeyCode::Char(c) if ctrl && !alt => match c.to_ascii_lowercase() {
@@ -44,6 +45,7 @@ fn map_key(key: event::KeyEvent) -> Option<KeyEvent> {
             'k' => KeyEvent::CtrlK,
             'z' => KeyEvent::CtrlZ,
             'y' => KeyEvent::CtrlY,
+            'q' => KeyEvent::CtrlQ,
             _ => return None,
         },
         KeyCode::Char(c) if !c.is_control() => KeyEvent::Char(c),
@@ -52,6 +54,12 @@ fn map_key(key: event::KeyEvent) -> Option<KeyEvent> {
         KeyCode::Delete => KeyEvent::Delete,
         KeyCode::Tab => KeyEvent::Tab,
         KeyCode::Esc => KeyEvent::Escape,
+        KeyCode::Up if shift => KeyEvent::ShiftUp,
+        KeyCode::Down if shift => KeyEvent::ShiftDown,
+        KeyCode::Left if shift => KeyEvent::ShiftLeft,
+        KeyCode::Right if shift => KeyEvent::ShiftRight,
+        KeyCode::Home if shift => KeyEvent::ShiftHome,
+        KeyCode::End if shift => KeyEvent::ShiftEnd,
         KeyCode::Up => KeyEvent::Up,
         KeyCode::Down => KeyEvent::Down,
         KeyCode::Left => KeyEvent::Left,
@@ -61,10 +69,12 @@ fn map_key(key: event::KeyEvent) -> Option<KeyEvent> {
         KeyCode::PageUp => KeyEvent::PageUp,
         KeyCode::PageDown => KeyEvent::PageDown,
         // Same F-key aliases as on UEFI.
+        KeyCode::F(1) => KeyEvent::Help,
         KeyCode::F(2) => KeyEvent::CtrlS,
         KeyCode::F(3) => KeyEvent::CtrlL,
         KeyCode::F(4) => KeyEvent::CtrlN,
         KeyCode::F(5) => KeyEvent::CtrlK,
+        KeyCode::F(10) => KeyEvent::CtrlQ,
         _ => return None,
     })
 }

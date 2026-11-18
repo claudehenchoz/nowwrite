@@ -1,8 +1,7 @@
 use crate::editor::buffer::TextBuffer;
 use crate::error::{Error, Result};
 use crate::platform::{FileInfo, Platform};
-use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::ToString;
 use alloc::vec::Vec;
 
 /// Directory whose `.md` files are offered for editing (the boot volume's
@@ -29,25 +28,4 @@ pub fn save<P: Platform>(platform: &mut P, buffer: &mut TextBuffer) -> Result<()
     platform.write_file(&path, &buffer.to_text())?;
     buffer.clear_modified();
     Ok(())
-}
-
-/// A file name for a new document that doesn't exist yet:
-/// `untitled.md`, `untitled_1.md`, ...
-pub fn unused_name<P: Platform>(platform: &mut P, base: &str) -> String {
-    let base: String = base
-        .trim_end_matches(".md")
-        .chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-            c => c,
-        })
-        .collect();
-
-    let mut name = format!("{base}.md");
-    let mut counter = 1;
-    while platform.exists(&name) {
-        name = format!("{base}_{counter}.md");
-        counter += 1;
-    }
-    name
 }

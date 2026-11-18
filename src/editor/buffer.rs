@@ -20,6 +20,9 @@ pub struct TextBuffer {
     redo_stack: Vec<Operation>,
     modified: bool,
     file_path: Option<String>,
+    /// Whether the next typed text may join the last undo step
+    /// (consecutive typing, no cursor movement in between).
+    merge_open: bool,
 }
 
 impl Default for TextBuffer {
@@ -55,6 +58,7 @@ impl TextBuffer {
             redo_stack: Vec::new(),
             modified: false,
             file_path: None,
+            merge_open: false,
         }
     }
 
@@ -107,9 +111,11 @@ impl TextBuffer {
     pub fn move_cursor(&mut self, new_cursor: Cursor) {
         self.cursor = self.clamp_cursor(new_cursor);
         self.selection = None;
+        self.merge_open = false;
     }
 
     pub fn move_cursor_with_selection(&mut self, new_cursor: Cursor) {
+        self.merge_open = false;
         let new_cursor = self.clamp_cursor(new_cursor);
         let anchor = self.selection.map_or(self.cursor, |s| s.start);
         self.selection = Some(Selection::new(anchor, new_cursor));
@@ -128,7 +134,30 @@ impl TextBuffer {
         self.delete_selection();
         let position = self.cursor;
         self.cursor = self.raw_insert(position, text);
-        self.record(Operation::Insert { position, text: text.to_string() });
+
+        // Group typing into words for undo: keep appending to the last insert
+        // while it's contiguous, but start a new step at the first letter
+        // after whitespace or at a line break.
+        let merge = self.merge_open
+            && !text.contains('\n')
+            && match self.undo_stack.last() {
+                Some(Operation::Insert { position: p, text: t }) => {
+                    !t.contains('\n')
+                        && p.line == position.line
+                        && p.column + t.chars().count() == position.column
+                        && !(t.ends_with(char::is_whitespace) && !text.starts_with(char::is_whitespace))
+                }
+                _ => false,
+            };
+        if merge {
+            if let Some(Operation::Insert { text: t, .. }) = self.undo_stack.last_mut() {
+                t.push_str(text);
+            }
+            self.redo_stack.clear();
+        } else {
+            self.record(Operation::Insert { position, text: text.to_string() });
+        }
+        self.merge_open = !text.contains('\n');
     }
 
     /// Backspace: delete the selection, or the char before the cursor.
@@ -165,6 +194,9 @@ impl TextBuffer {
         let Some(selection) = self.selection.take() else {
             return false;
         };
+        if selection.is_empty() {
+            return false;
+        }
         let Selection { start, end } = selection.normalize();
         let count = self.chars_between(start, end);
         if count > 0 {
@@ -175,39 +207,86 @@ impl TextBuffer {
         true
     }
 
-    /// Surround the selection, or the word under the cursor, with `marker`.
-    /// With neither, insert a marker pair and place the cursor between them.
-    pub fn wrap_with(&mut self, marker: &str) {
+    /// Bold/italic toggle. Surround the selection, or the word under the
+    /// cursor, with `marker` (`*` or `**`), or remove the marker if it is
+    /// already there. With neither, insert a marker pair and place the
+    /// cursor between them.
+    ///
+    /// The cursor stays at the same place in the word (and a selection stays
+    /// on the same text), so toggling again undoes the change.
+    pub fn toggle_wrap(&mut self, marker: &str) {
+        self.merge_open = false;
         let marker_len = marker.chars().count();
-        let range = match self.selection.take() {
-            Some(sel) if !sel.is_empty() => {
+        let original = self.cursor;
+        let selection = self.selection.take().filter(|sel| !sel.is_empty());
+        let range = match selection {
+            Some(sel) => {
                 let sel = sel.normalize();
                 Some((sel.start, sel.end))
             }
-            _ => self.word_at_cursor(),
+            None => self.word_at_cursor(),
         };
 
-        match range {
-            Some((start, end)) => {
-                // Insert at the end first so `start` stays valid.
-                self.cursor = end;
-                self.insert_str(marker);
-                self.cursor = start;
-                self.insert_str(marker);
-                let end = if end.line == start.line {
-                    Cursor::new_at(end.line, end.column + 2 * marker_len)
-                } else {
-                    Cursor::new_at(end.line, end.column + marker_len)
-                };
-                self.cursor = end;
+        let Some((start, end)) = range else {
+            let start = self.cursor;
+            self.insert_str(marker);
+            self.insert_str(marker);
+            self.cursor = Cursor::new_at(start.line, start.column + marker_len);
+            self.merge_open = false;
+            return;
+        };
+
+        // `*` markers present on both sides. Italic is 1 (or 3 = bold
+        // italic); bold is 2 or more.
+        let stars = self.stars_before(start).min(self.stars_after(end));
+        let present = if marker_len >= 2 { stars >= 2 } else { stars == 1 || stars >= 3 };
+        // Positions on the first line after the opening marker move by `delta`
+        // columns once it is added (+) or removed (-).
+        let shift = |pos: Cursor, delta: isize| {
+            if pos.line == start.line && pos.column >= start.column {
+                Cursor::new_at(pos.line, pos.column.saturating_add_signed(delta))
+            } else {
+                pos
             }
-            None => {
-                let start = self.cursor;
-                self.insert_str(marker);
-                self.insert_str(marker);
-                self.cursor = Cursor::new_at(start.line, start.column + marker_len);
-            }
+        };
+        let delta = marker_len as isize;
+
+        let delta = if present {
+            // Remove the closing marker first so `start` stays valid.
+            let text = self.raw_remove(end, marker_len);
+            self.record(Operation::Delete { position: end, text });
+            let open = Cursor::new_at(start.line, start.column - marker_len);
+            let text = self.raw_remove(open, marker_len);
+            self.record(Operation::Delete { position: open, text });
+            -delta
+        } else {
+            // Closing marker first; the cursor and `start` stay valid.
+            self.cursor = end;
+            self.insert_str(marker);
+            self.cursor = start;
+            self.merge_open = false;
+            self.insert_str(marker);
+            delta
+        };
+
+        if selection.is_some() {
+            // Keep the same text selected (without the markers).
+            let (new_start, new_end) = (shift(start, delta), shift(end, delta));
+            self.cursor = new_end;
+            self.selection = Some(Selection::new(new_start, new_end));
+        } else {
+            self.cursor = shift(original, delta);
         }
+        self.merge_open = false;
+    }
+
+    fn stars_before(&self, pos: Cursor) -> usize {
+        let line: Vec<char> = self.lines[pos.line].chars().collect();
+        line[..pos.column.min(line.len())].iter().rev().take_while(|&&c| c == '*').count()
+    }
+
+    fn stars_after(&self, pos: Cursor) -> usize {
+        self.lines[pos.line].chars().skip(pos.column).take_while(|&c| c == '*').count()
     }
 
     pub fn undo(&mut self) -> bool {
@@ -225,6 +304,7 @@ impl TextBuffer {
         }
         self.redo_stack.push(operation);
         self.selection = None;
+        self.merge_open = false;
         self.modified = true;
         true
     }
@@ -244,6 +324,7 @@ impl TextBuffer {
         }
         self.undo_stack.push(operation);
         self.selection = None;
+        self.merge_open = false;
         self.modified = true;
         true
     }
@@ -332,6 +413,7 @@ impl TextBuffer {
     }
 
     fn record(&mut self, operation: Operation) {
+        self.merge_open = false;
         self.undo_stack.push(operation);
         self.redo_stack.clear();
         if self.undo_stack.len() > 1000 {
@@ -403,15 +485,100 @@ mod tests {
     }
 
     #[test]
-    fn wrap_word_and_empty() {
+    fn toggle_wrap_word_and_empty() {
         let mut buf = TextBuffer::from_string("say hello now");
         buf.move_cursor(Cursor::new_at(0, 6));
-        buf.wrap_with("**");
+        buf.toggle_wrap("**");
         assert_eq!(buf.to_text(), "say **hello** now");
+        // The cursor stays on the same letter ("l"), inside the markers...
+        assert_eq!(buf.cursor(), Cursor::new_at(0, 8));
+        // ...so toggling again removes them and puts it back.
+        buf.toggle_wrap("**");
+        assert_eq!(buf.to_text(), "say hello now");
+        assert_eq!(buf.cursor(), Cursor::new_at(0, 6));
 
         let mut buf = TextBuffer::new();
-        buf.wrap_with("*");
+        buf.toggle_wrap("*");
         assert_eq!(buf.to_text(), "**");
         assert_eq!(buf.cursor().column, 1);
+    }
+
+    #[test]
+    fn toggle_repeats_with_cursor_at_word_edges() {
+        // Cursor right after the word (typical right after typing it).
+        let mut buf = TextBuffer::from_string("hello");
+        buf.move_cursor(Cursor::new_at(0, 5));
+        buf.toggle_wrap("*");
+        assert_eq!(buf.to_text(), "*hello*");
+        assert_eq!(buf.cursor(), Cursor::new_at(0, 6));
+        buf.toggle_wrap("*");
+        assert_eq!(buf.to_text(), "hello");
+        assert_eq!(buf.cursor(), Cursor::new_at(0, 5));
+
+        // Cursor at the start of the word.
+        buf.move_cursor(Cursor::new_at(0, 0));
+        buf.toggle_wrap("**");
+        assert_eq!(buf.to_text(), "**hello**");
+        assert_eq!(buf.cursor(), Cursor::new_at(0, 2));
+        buf.toggle_wrap("**");
+        assert_eq!(buf.to_text(), "hello");
+        assert_eq!(buf.cursor(), Cursor::new_at(0, 0));
+    }
+
+    #[test]
+    fn toggle_italic_and_bold_combine() {
+        let mut buf = TextBuffer::from_string("**bold**");
+        buf.move_cursor(Cursor::new_at(0, 4));
+        buf.toggle_wrap("*");
+        assert_eq!(buf.to_text(), "***bold***");
+        buf.toggle_wrap("*");
+        assert_eq!(buf.to_text(), "**bold**");
+        buf.toggle_wrap("**");
+        assert_eq!(buf.to_text(), "bold");
+    }
+
+    #[test]
+    fn toggle_wrap_selection_repeats_and_undo() {
+        let mut buf = TextBuffer::from_string("one two three");
+        buf.move_cursor(Cursor::new_at(0, 4));
+        buf.move_cursor_with_selection(Cursor::new_at(0, 13));
+        buf.toggle_wrap("*");
+        assert_eq!(buf.to_text(), "one *two three*");
+        // The same text stays selected, so toggling again removes the markers.
+        buf.toggle_wrap("*");
+        assert_eq!(buf.to_text(), "one two three");
+        assert_eq!(
+            buf.selection().map(|s| s.normalize()),
+            Some(Selection::new(Cursor::new_at(0, 4), Cursor::new_at(0, 13)))
+        );
+        buf.undo();
+        buf.undo();
+        assert_eq!(buf.to_text(), "one *two three*");
+        buf.undo();
+        buf.undo();
+        assert_eq!(buf.to_text(), "one two three");
+    }
+
+    #[test]
+    fn undo_groups_typing_by_word() {
+        let mut buf = TextBuffer::new();
+        for ch in "hello w\u{f6}rld".chars() {
+            buf.insert_char(ch);
+        }
+        buf.undo();
+        assert_eq!(buf.to_text(), "hello ");
+        buf.undo();
+        assert_eq!(buf.to_text(), "");
+        buf.redo();
+        buf.redo();
+        assert_eq!(buf.to_text(), "hello w\u{f6}rld");
+
+        // Moving the cursor starts a new undo step.
+        let mut buf = TextBuffer::new();
+        buf.insert_str("ab");
+        buf.move_cursor(Cursor::new_at(0, 1));
+        buf.insert_char('x');
+        buf.undo();
+        assert_eq!(buf.to_text(), "ab");
     }
 }

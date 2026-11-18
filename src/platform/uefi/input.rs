@@ -15,6 +15,8 @@ use uefi::{system, Event, Handle};
 const CONTROL_PRESSED: u32 = 0x0000_0004 | 0x0000_0008;
 /// `EFI_RIGHT_ALT_PRESSED`: AltGr on international keyboards.
 const RIGHT_ALT_PRESSED: u32 = 0x0000_0010;
+/// `EFI_RIGHT_SHIFT_PRESSED | EFI_LEFT_SHIFT_PRESSED`.
+const SHIFT_PRESSED: u32 = 0x0000_0001 | 0x0000_0002;
 
 /// How often `read_key` returns `KeyEvent::Tick` while idle (cursor blink).
 const TICK: Duration = Duration::from_millis(500);
@@ -44,16 +46,13 @@ impl UefiInput {
 
     pub fn read_key(&mut self) -> Result<KeyEvent> {
         loop {
-            let (key, ctrl, altgr) = if self.input_ex.is_some() {
+            let (key, shift_state) = if self.input_ex.is_some() {
                 let key_event = self.input_ex.as_ref().unwrap().wait_for_key_event().map_err(err)?;
                 if !self.wait_for_key(key_event)? {
                     return Ok(KeyEvent::Tick);
                 }
                 match self.input_ex.as_mut().unwrap().read_key().map_err(err)? {
-                    Some(data) => {
-                        let shift = data.key_state.key_shift_state.map_or(0, |s| s.bits());
-                        (data.key, shift & CONTROL_PRESSED != 0, shift & RIGHT_ALT_PRESSED != 0)
-                    }
+                    Some(data) => (data.key, data.key_state.key_shift_state.map_or(0, |s| s.bits())),
                     None => continue,
                 }
             } else {
@@ -62,11 +61,11 @@ impl UefiInput {
                     return Ok(KeyEvent::Tick);
                 }
                 match system::with_stdin(|stdin| stdin.read_key()).map_err(err)? {
-                    Some(key) => (key, false, false),
+                    Some(key) => (key, 0),
                     None => continue,
                 }
             };
-            if let Some(mapped) = map_key(key, ctrl, altgr) {
+            if let Some(mapped) = map_key(key, shift_state) {
                 return Ok(mapped);
             }
         }
@@ -102,7 +101,11 @@ fn open_input_ex() -> Option<ScopedProtocol<InputEx>> {
     .ok()
 }
 
-fn map_key(key: Key, ctrl: bool, altgr: bool) -> Option<KeyEvent> {
+/// Map a firmware key plus its shift-state bits (0 without InputEx).
+fn map_key(key: Key, shift_state: u32) -> Option<KeyEvent> {
+    let ctrl = shift_state & CONTROL_PRESSED != 0;
+    let altgr = shift_state & RIGHT_ALT_PRESSED != 0;
+    let shift = shift_state & SHIFT_PRESSED != 0;
     match key {
         Key::Printable(c16) => {
             let ch = char::from(c16);
@@ -121,6 +124,12 @@ fn map_key(key: Key, ctrl: bool, altgr: bool) -> Option<KeyEvent> {
             }
         }
         Key::Special(scan) => Some(match scan {
+            ScanCode::UP if shift => KeyEvent::ShiftUp,
+            ScanCode::DOWN if shift => KeyEvent::ShiftDown,
+            ScanCode::LEFT if shift => KeyEvent::ShiftLeft,
+            ScanCode::RIGHT if shift => KeyEvent::ShiftRight,
+            ScanCode::HOME if shift => KeyEvent::ShiftHome,
+            ScanCode::END if shift => KeyEvent::ShiftEnd,
             ScanCode::UP => KeyEvent::Up,
             ScanCode::DOWN => KeyEvent::Down,
             ScanCode::LEFT => KeyEvent::Left,
@@ -131,11 +140,13 @@ fn map_key(key: Key, ctrl: bool, altgr: bool) -> Option<KeyEvent> {
             ScanCode::PAGE_DOWN => KeyEvent::PageDown,
             ScanCode::DELETE => KeyEvent::Delete,
             ScanCode::ESCAPE => KeyEvent::Escape,
+            ScanCode::FUNCTION_1 => KeyEvent::Help,
             // Aliases for firmware that doesn't report Ctrl.
             ScanCode::FUNCTION_2 => KeyEvent::CtrlS,
             ScanCode::FUNCTION_3 => KeyEvent::CtrlL,
             ScanCode::FUNCTION_4 => KeyEvent::CtrlN,
             ScanCode::FUNCTION_5 => KeyEvent::CtrlK,
+            ScanCode::FUNCTION_10 => KeyEvent::CtrlQ,
             _ => return None,
         }),
     }
@@ -151,6 +162,7 @@ fn ctrl_letter(ch: char) -> Option<KeyEvent> {
         'k' => KeyEvent::CtrlK,
         'z' => KeyEvent::CtrlZ,
         'y' => KeyEvent::CtrlY,
+        'q' => KeyEvent::CtrlQ,
         _ => return None,
     })
 }

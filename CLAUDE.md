@@ -39,11 +39,17 @@ The `terminal` and `uefi` features are mutually exclusive. Enabling both fails w
 The crate is a library (`src/lib.rs`) plus two thin binaries. **The library is `no_std` + `alloc`.** Core code must use `alloc::`/`core::` types and the crate's `Error`/`Result` (`src/error.rs`), never `std::`. Only `platform/terminal.rs` may use `std`, behind `feature = "terminal"`. Tests get `std` through `cfg(test)`.
 
 - `Platform` trait (`src/platform/mod.rs`) covers input (`KeyEvent`), file I/O, `now() -> Timestamp`, and battery. `init()` returns the platform **and** a ratatui `Backend`. On UEFI, `REMAP_KEYBOARD_LAYOUT` is true because firmware delivers US-layout chars (plus `KeyEvent::AltGr(c)` when right Alt is held). `SOFTWARE_CURSOR` is also true there: the editor paints and blinks its own block cursor, driven by `KeyEvent::Tick` (every 500 ms on UEFI, every 1 s idle in the terminal, which also gives idle backups). Paths passed to the platform are `/`-separated and relative to the document root (`"."`, `".nowwrite/x.bak"`).
-- `editor::Editor` (`src/editor/mod.rs`) is the single owner of the platform and the `ratatui::Terminal`. Its loop is: backup check → `terminal.draw` → `read_key` → layout translation → dispatch by `Mode` (`Editing`, `Files(FileModal)`, `Keyboard(KeyboardModal)`). Modals are state + `render` + `handle_key`, drawn as overlays. Renderers return the cursor position instead of setting it, so `Editor::draw` can choose the hardware or software cursor. File-operation errors go to the status-bar `message` instead of aborting.
-- `editor::buffer::TextBuffer` stores lines with **char-index** columns, converted to byte offsets internally. Undo/redo records `Insert`/`Delete { position, text }` and replays them through raw helpers that don't touch the undo stack.
+- `editor::Editor` (`src/editor/mod.rs`) is the single owner of the platform and the `ratatui::Terminal`. Its loop is: backup check → `terminal.draw` → `read_key` → layout translation → dispatch by `Mode`:
+  - `Editing`, `Files(FileModal)` and `Keyboard(KeyboardModal)`;
+  - `Confirm(Pending)`: the "save changes?" prompt;
+  - `Help(Box<Mode>)`: the F1 overlay, which restores the previous mode.
+
+  Anything that replaces or closes the document (Ctrl+L/N/Q) goes through `request(Pending)`, which asks first when the buffer is modified. Saving an unnamed document opens the Save As prompt. `after_save` continues the pending action once the save succeeds. Esc never quits. Modals are state + `render` + `handle_key`, drawn as overlays. Renderers return the cursor position instead of setting it, so `Editor::draw` can choose the hardware or software cursor. File-operation errors go to the status-bar `message` instead of aborting.
+- `editor::buffer::TextBuffer` stores lines with **char-index** columns, converted to byte offsets internally. Undo/redo records `Insert`/`Delete { position, text }` and replays them through raw helpers that don't touch the undo stack. Consecutive typing merges into one undo step per word (`merge_open`); cursor moves end a step. `toggle_wrap` adds or removes `*`/`**` around the selection or word.
 - `editor::markdown::highlight` splits a line into styled spans **including** the `*`/`#` markers, so screen columns equal cursor columns. Don't strip markers when rendering.
 - `file/` uses free functions taking `&mut P`. `manager` handles list/load/save/unused names. `BackupManager` writes `.nowwrite/<name>.<YYYYMMDD_HHMMSS>.bak` every 5 min and before each save. `config/keyboard.rs` stores layouts as static tables mapping US chars to an `Output` (`Char` or `Dead` accent), with separate normal and AltGr tables. `KeyboardConfig::translate` handles dead-key composition. The selected layout is persisted to `.nowwrite/.keyboard.config`. Only en-US and de-CH exist, per PROMPT.md. OVMF reports nothing for the ISO key (`<` `>` `\`), so de-CH maps AltGr+`,` `.` `-` to `<` `>` `\`.
-- `ui/` has the theme helpers (in `ui/mod.rs`), `editor_view`, `status_bar` and `modal`. Keep styles to Reset/White(+bold)/DarkGray backgrounds and glyphs to ASCII, box drawing and arrows. That is what the UEFI console can show.
+- `ui/editor_view.rs` soft-wraps lines into screen `Row`s (`wrap_line`/`layout`, unit-tested). Up/Down/PageUp/PageDown/Home/End move by screen row via `EditorView::vertical`/`row_edge`, and the editor keeps a `goal_x` column. The file still stores one line per paragraph.
+- `ui/` has the theme helpers (in `ui/mod.rs`), `editor_view`, `status_bar` and `modal` (file box, Save As/New name prompt, layout picker, confirm prompt, help overlay). Keep styles to Reset/White(+bold)/DarkGray backgrounds and glyphs to ASCII, box drawing and arrows. That is what the UEFI console can show.
 - `platform/terminal.rs` uses crossterm via the `ratatui::crossterm` re-export, not a direct dependency. `Drop` and a panic hook restore the terminal.
 - `platform/uefi/` targets uefi 0.41 (global allocator + panic handler come from crate features).
   - `backend.rs` implements ratatui `Backend` over Simple Text Output. It batches same-color runs, maps any background to LightGray with black text, and skips the bottom-right cell, which would scroll the screen.
@@ -71,7 +77,6 @@ The firmware clock is UTC, so backup timestamps in the VM are UTC.
 
 ### Not yet implemented (from PROMPT.md)
 
-- Shift+arrow selection: `TextBuffer` supports selections, but no key produces them.
 - Battery level (needs ACPI/EC access).
 - Turning off radios to save power.
 - Sleep on lid close.

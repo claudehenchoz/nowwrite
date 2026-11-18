@@ -63,15 +63,20 @@ sudo ./scripts/create-boot-drive.sh /dev/sdX NOWWRITE
 
 | Key Combination | Alternative | Action |
 |-----------------|-------------|--------|
-| Arrow keys, Home/End, PgUp/PgDn | | Move cursor |
-| Ctrl+S | F2 | Save file (creates a backup first) |
-| Ctrl+L | F3 | Open file |
-| Ctrl+N | F4 | New file (prompts for a name) |
-| Ctrl+K | F5 | Change keyboard layout |
-| Ctrl+B | | Bold: wrap the word or selection in `**` |
-| Ctrl+I | | Italic: wrap the word or selection in `*` |
-| Ctrl+Z / Ctrl+Y | | Undo / redo |
-| Escape | | Exit (press twice if there are unsaved changes) |
+| F1 | | Help: every shortcut on one screen |
+| Arrow keys, Home/End, PgUp/PgDn | | Move the cursor (Up/Down/Home/End follow wrapped lines on screen) |
+| Shift+Arrows, Shift+Home/End | | Select text |
+| Ctrl+S | F2 | Save (creates a backup first; asks for a name the first time) |
+| Ctrl+L | F3 | Open a document |
+| Ctrl+N | F4 | New document (asks for a name) |
+| Ctrl+K | F5 | Change keyboard layout (UEFI version) |
+| Ctrl+B | | Bold on/off for the word or selection (`**`) |
+| Ctrl+I | | Italic on/off for the word or selection (`*`) |
+| Ctrl+Z / Ctrl+Y | | Undo / redo (word by word) |
+| Ctrl+Q | F10 | Quit |
+| Esc | | Close a box |
+
+Opening, creating or quitting with unsaved changes asks whether to save first. Long lines wrap at word boundaries; the file itself keeps one line per paragraph.
 
 The F-keys exist because some firmware doesn't report Ctrl key combinations.
 

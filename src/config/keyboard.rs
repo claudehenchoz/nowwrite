@@ -188,6 +188,11 @@ impl KeyboardConfig {
         out
     }
 
+    /// The accent of a dead key waiting for its letter, if any.
+    pub fn pending_dead(&self) -> Option<char> {
+        self.pending_dead
+    }
+
     /// Forget a pending dead key (e.g. on Enter or cursor movement).
     pub fn cancel_dead_key(&mut self) {
         self.pending_dead = None;

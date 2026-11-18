@@ -34,6 +34,17 @@ pub enum KeyEvent {
     CtrlK,
     CtrlZ,
     CtrlY,
+    /// Quit (Ctrl+Q, F10).
+    CtrlQ,
+    /// Show the help overlay (F1).
+    Help,
+    // Cursor movement with Shift held: extends the selection.
+    ShiftUp,
+    ShiftDown,
+    ShiftLeft,
+    ShiftRight,
+    ShiftHome,
+    ShiftEnd,
     /// The screen size changed; nothing to do except redraw.
     Resize,
     /// No key arrived within the platform's tick interval. Drives the

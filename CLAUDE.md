@@ -40,7 +40,8 @@ The crate is a library (`src/lib.rs`) plus two thin binaries. **The library is `
 
 - `Platform` trait (`src/platform/mod.rs`) covers input (`KeyEvent`), file I/O, `now() -> Timestamp`, and battery. Both platforms produce the same `KeyEvent`s:
   - Ctrl shortcuts (`CtrlS`…`CtrlQ`) and `Help` (F1);
-  - `Shift{Up,Down,Left,Right,Home,End}` for selection, and `CtrlLeft`/`CtrlRight` (plus `CtrlShift…` to select) for word movement (`TextBuffer::word_left`/`word_right`, sharing `is_word_char` with the bold/italic word detection);
+  - `Shift{Up,Down,Left,Right,Home,End}` for selection;
+  - `CtrlLeft`/`CtrlRight` for word movement, and `CtrlShiftLeft`/`CtrlShiftRight` to select by word;
   - F-key aliases (F2 save, F3 open, F4 new, F5 layout, F10 quit), for firmware that drops Ctrl.
 
   `init()` returns the platform **and** a ratatui `Backend`. On UEFI, `REMAP_KEYBOARD_LAYOUT` is true because firmware delivers US-layout chars (plus `KeyEvent::AltGr(c)` when right Alt is held). `SOFTWARE_CURSOR` is also true there: the editor paints and blinks its own block cursor, driven by `KeyEvent::Tick` (every 500 ms on UEFI, every 1 s idle in the terminal, which also gives idle backups). After any key the editor skips one tick (`skip_tick`), so the cursor stays visible for at least a full blink period while typing. Paths passed to the platform are `/`-separated and relative to the document root (`"."`, `".nowwrite/x.bak"`).
@@ -51,6 +52,10 @@ The crate is a library (`src/lib.rs`) plus two thin binaries. **The library is `
 
   Anything that replaces or closes the document (Ctrl+L/N/Q) goes through `request(Pending)`, which asks first when the buffer is modified. Saving an unnamed document opens the Save As prompt. `after_save` continues the pending action once the save succeeds. Esc never quits. Modals are state + `render` + `handle_key`, drawn as overlays. Renderers return the cursor position instead of setting it, so `Editor::draw` can choose the hardware or software cursor. File-operation errors go to the status-bar `message` instead of aborting.
 - `editor::buffer::TextBuffer` stores lines with **char-index** columns, converted to byte offsets internally. Undo/redo records `Insert`/`Delete { position, text }` and replays them through raw helpers that don't touch the undo stack. Consecutive typing merges into one undo step per word (`merge_open`); cursor moves end a step. `toggle_wrap` adds or removes `*`/`**` around the selection or word: `*` = italic (also `***`), `**` = bold. It keeps the cursor on the same letter, or keeps the same text selected, so pressing the shortcut again undoes it.
+  - Word movement (`word_left`/`word_right`) works on buffer lines, not screen rows.
+  - Ctrl+Right skips the rest of the word, then spaces, punctuation and markdown markers, stopping at the next word start. At the end of a line it goes to the next line's start.
+  - Ctrl+Left mirrors that, going to the previous line's end from column 0.
+  - A word is alphanumerics plus `'` and `-` (`is_word_char`), so `don't` is one word. The same rule decides which word Ctrl+B/Ctrl+I wrap; keep the two in sync.
 - `editor::markdown::highlight` splits a line into styled spans **including** the `*`/`#` markers, so screen columns equal cursor columns. Don't strip markers when rendering.
 - `file/` uses free functions taking `&mut P`. `manager` handles list/load/save. `BackupManager` writes `.nowwrite/<name>.<YYYYMMDD_HHMMSS>.bak` every 5 min and before each save. `config/keyboard.rs` stores layouts as static tables mapping US chars to an `Output` (`Char` or `Dead` accent), with separate normal and AltGr tables. `KeyboardConfig::translate` handles dead-key composition. The selected layout is persisted to `.nowwrite/.keyboard.config`. Only en-US and de-CH exist, per PROMPT.md. OVMF reports nothing for the ISO key (`<` `>` `\`), so de-CH maps AltGr+`,` `.` `-` to `<` `>` `\`.
 - `ui/editor_view.rs` soft-wraps lines into screen `Row`s (`wrap_line`/`layout`, unit-tested). Up/Down/PageUp/PageDown/Home/End move by screen row via `EditorView::vertical`/`row_edge`, and the editor keeps a `goal_x` column. The file still stores one line per paragraph.

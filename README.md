@@ -44,9 +44,16 @@ This produces `output/NowWrite.efi` and, with the boot option, `output/boot/EFI/
 .\scripts\run-qemu.ps1
 ```
 
+On Linux:
+
+```bash
+./scripts/build-uefi.sh
+./scripts/run-qemu.sh
+```
+
 Your test documents live in `output\drive\`, which is created on the first run. The script:
 1. builds a writable FAT16 disk image (`output\nowwrite-disk.img`) from that folder plus `NowWrite.efi`;
-2. boots it with the UEFI firmware bundled with QEMU for Windows (pass `-Ovmf <file>` to use another);
+2. boots it with the UEFI firmware bundled with QEMU for Windows, or the system OVMF package on Linux (pass `-Ovmf <file>` / `--ovmf <file>` to use another);
 3. copies everything back into `output\drive\` when QEMU exits, so saved documents and `.nowwrite\` backups appear on the host.
 
 It needs Python 3 (for `scripts\fatimg.py`, standard library only).

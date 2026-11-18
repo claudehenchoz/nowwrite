@@ -18,7 +18,7 @@ cargo run
 cargo build --release --bin nowwrite_uefi --target x86_64-unknown-uefi --no-default-features --features uefi
 
 # Boot in QEMU from a writable disk image synced with output/drive/ (needs output/NowWrite.efi + Python 3)
-./scripts/run-qemu.ps1
+./scripts/run-qemu.sh                 # PowerShell: scripts/run-qemu.ps1
 
 # Tests
 cargo test
@@ -89,13 +89,13 @@ These came out of a first-time-user review; keep them when adding features.
 
 ### Testing under QEMU
 
-`run-qemu.ps1` uses `scripts/fatimg.py`, a stdlib-only FAT16 image tool (MBR + one partition, long file names, subdirectories):
+`run-qemu.sh` / `run-qemu.ps1` use `scripts/fatimg.py`, a stdlib-only FAT16 image tool (MBR + one partition, long file names, subdirectories):
 - `create` builds `output/nowwrite-disk.img` from `output/drive/` plus `\EFI\BOOT\BOOTX64.EFI`.
 - `extract --skip EFI` copies the image back to `output/drive/` after QEMU exits. It also runs at startup, to recover a run that was killed.
 
 Don't use QEMU's `fat:rw:<dir>` drive: it doesn't reliably write changes back to the host.
 
-Headless runs: `./scripts/run-qemu.ps1 -QemuArgs '-display','none','-monitor','tcp:127.0.0.1:4444,server,nowait'`. Drive them through the monitor:
+Headless runs: `./scripts/run-qemu.sh -- -display none -monitor tcp:127.0.0.1:4444,server,nowait` (PowerShell: `-QemuArgs '-display','none','-monitor','tcp:127.0.0.1:4444,server,nowait'`). Drive them through the monitor:
 - `sendkey ctrl-s`, `sendkey f4` and similar send keys;
 - `screendump file.ppm` captures the screen; convert it to PNG to view;
 - `quit` ends QEMU, after which the script syncs files back.

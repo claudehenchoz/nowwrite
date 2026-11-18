@@ -14,6 +14,8 @@ pub mod editor;
 pub mod error;
 pub mod file;
 pub mod font;
+pub mod heap;
+pub mod perf;
 pub mod platform;
 pub mod ui;
 

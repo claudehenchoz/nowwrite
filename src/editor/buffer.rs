@@ -23,6 +23,16 @@ pub struct TextBuffer {
     /// Whether the next typed text may join the last undo step
     /// (consecutive typing, no cursor movement in between).
     merge_open: bool,
+    /// Running totals for the status bar, updated by the raw edit helpers
+    /// so drawing a frame doesn't recount the whole document.
+    words: usize,
+    /// Chars excluding line breaks.
+    chars: usize,
+}
+
+/// Words and chars of one line (line breaks not included).
+fn counts(line: &str) -> (usize, usize) {
+    (line.split_whitespace().count(), line.chars().count())
 }
 
 impl Default for TextBuffer {
@@ -56,7 +66,10 @@ impl TextBuffer {
             lines = vec![String::new()];
         }
 
+        let (words, chars) = lines.iter().map(|l| counts(l)).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
         Self {
+            words,
+            chars,
             lines,
             cursor: Cursor::new(),
             selection: None,
@@ -106,12 +119,28 @@ impl TextBuffer {
     }
 
     pub fn word_count(&self) -> usize {
-        self.lines.iter().map(|l| l.split_whitespace().count()).sum()
+        self.words
     }
 
+    /// Chars including line breaks.
     pub fn char_count(&self) -> usize {
-        let chars: usize = self.lines.iter().map(|l| l.chars().count()).sum();
-        chars + self.lines.len() - 1
+        self.chars + self.lines.len() - 1
+    }
+
+    /// Remove line `idx` from the running totals (before changing it).
+    fn uncount(&mut self, idx: usize) {
+        let (w, c) = counts(&self.lines[idx]);
+        self.words -= w;
+        self.chars -= c;
+    }
+
+    /// Add lines `range` to the running totals (after changing them).
+    fn count_lines(&mut self, range: core::ops::RangeInclusive<usize>) {
+        for idx in range {
+            let (w, c) = counts(&self.lines[idx]);
+            self.words += w;
+            self.chars += c;
+        }
     }
 
     pub fn move_cursor(&mut self, new_cursor: Cursor) {
@@ -411,6 +440,8 @@ impl TextBuffer {
     /// position just after the inserted text.
     fn raw_insert(&mut self, pos: Cursor, text: &str) -> Cursor {
         let mut cur = self.clamp_cursor(pos);
+        let first = cur.line;
+        self.uncount(first);
         for ch in text.chars() {
             let line = &mut self.lines[cur.line];
             let at = byte_idx(line, cur.column);
@@ -423,6 +454,7 @@ impl TextBuffer {
                 cur.column += 1;
             }
         }
+        self.count_lines(first..=cur.line);
         self.modified = true;
         cur
     }
@@ -432,12 +464,14 @@ impl TextBuffer {
     fn raw_remove(&mut self, pos: Cursor, count: usize) -> String {
         let pos = self.clamp_cursor(pos);
         let mut removed = String::new();
+        self.uncount(pos.line);
         for _ in 0..count {
             if pos.column < self.line_len(pos.line) {
                 let line = &mut self.lines[pos.line];
                 let at = byte_idx(line, pos.column);
                 removed.push(line.remove(at));
             } else if pos.line + 1 < self.lines.len() {
+                self.uncount(pos.line + 1);
                 let next = self.lines.remove(pos.line + 1);
                 self.lines[pos.line].push_str(&next);
                 removed.push('\n');
@@ -445,6 +479,7 @@ impl TextBuffer {
                 break;
             }
         }
+        self.count_lines(pos.line..=pos.line);
         if !removed.is_empty() {
             self.modified = true;
         }
@@ -497,6 +532,34 @@ mod tests {
         buf.delete_char();
         assert_eq!(buf.to_text(), "äbc");
         assert_eq!(buf.cursor(), Cursor::new_at(0, 1));
+    }
+
+    #[test]
+    fn running_counts_match_a_recount() {
+        let recount = |b: &TextBuffer| {
+            let words: usize = b.lines().iter().map(|l| l.split_whitespace().count()).sum();
+            let chars: usize = b.lines().iter().map(|l| l.chars().count()).sum::<usize>() + b.lines().len() - 1;
+            (words, chars)
+        };
+        let mut b = TextBuffer::from_string("one two\nthree  four five\n\nsix é");
+        assert_eq!((b.word_count(), b.char_count()), recount(&b));
+        b.move_cursor(Cursor::new_at(0, 3));
+        b.insert_str(" and\nmore words ");
+        assert_eq!((b.word_count(), b.char_count()), recount(&b));
+        b.move_cursor(Cursor::new_at(1, 0));
+        b.move_cursor_with_selection(Cursor::new_at(3, 2));
+        b.delete_selection();
+        assert_eq!((b.word_count(), b.char_count()), recount(&b));
+        b.delete_char();
+        b.delete_forward();
+        b.insert_char('\n');
+        assert_eq!((b.word_count(), b.char_count()), recount(&b));
+        while b.undo() {
+            assert_eq!((b.word_count(), b.char_count()), recount(&b));
+        }
+        while b.redo() {
+            assert_eq!((b.word_count(), b.char_count()), recount(&b));
+        }
     }
 
     #[test]

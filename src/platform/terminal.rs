@@ -125,6 +125,21 @@ impl Platform for TerminalPlatform {
         }
     }
 
+    fn poll_key(&mut self) -> Result<Option<KeyEvent>> {
+        while event::poll(std::time::Duration::ZERO)? {
+            match event::read()? {
+                Event::Key(key) if key.kind != KeyEventKind::Release => {
+                    if let Some(mapped) = map_key(key) {
+                        return Ok(Some(mapped));
+                    }
+                }
+                Event::Resize(..) => return Ok(Some(KeyEvent::Resize)),
+                _ => {}
+            }
+        }
+        Ok(None)
+    }
+
     fn list_files(&mut self, dir: &str) -> Result<Vec<FileInfo>> {
         let mut files = Vec::new();
         for entry in fs::read_dir(dir)? {

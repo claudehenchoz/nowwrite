@@ -18,6 +18,12 @@ use uefi::fs::{FileSystem, PathBuf};
 use uefi::proto::console::text::Color;
 use uefi::{boot, runtime, system, CString16};
 
+/// Small allocations come from size-class free lists instead of a firmware
+/// call each (see `heap.rs`); large ones still use the UEFI pool.
+#[global_allocator]
+static HEAP: crate::heap::SizeClassHeap<uefi::allocator::Allocator> =
+    crate::heap::SizeClassHeap::new(uefi::allocator::Allocator);
+
 /// Contains `text` to force the text console (for firmware whose GOP is broken).
 const DISPLAY_CONFIG: &str = ".nowwrite/.display.config";
 
@@ -50,6 +56,12 @@ impl Platform for UefiPlatform {
     const SOFTWARE_CURSOR: bool = true;
 
     fn init() -> Result<(Self, Self::Backend)> {
+        #[cfg(feature = "perf")]
+        {
+            let start = crate::perf::now();
+            boot::stall(core::time::Duration::from_millis(20));
+            crate::perf::set_ticks_per_us(crate::perf::now().wrapping_sub(start) / 20_000);
+        }
         // The file system comes first: it holds the display setting.
         let fs = boot::get_image_file_system(boot::image_handle())
             .map_err(|e| Error::Io(format!("boot volume not accessible: {e:?}")))?;
@@ -61,6 +73,10 @@ impl Platform for UefiPlatform {
 
     fn read_key(&mut self) -> Result<KeyEvent> {
         self.input.read_key()
+    }
+
+    fn poll_key(&mut self) -> Result<Option<KeyEvent>> {
+        self.input.poll_key()
     }
 
     fn list_files(&mut self, dir: &str) -> Result<Vec<FileInfo>> {

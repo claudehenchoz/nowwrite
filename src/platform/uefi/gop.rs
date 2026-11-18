@@ -8,6 +8,7 @@
 
 use crate::error::{Error, Result};
 use crate::font::{self, boxdraw, Face, Font};
+use crate::perf::{self, Phase};
 use crate::ui::theme::{self, Rgb};
 use alloc::format;
 use alloc::vec;
@@ -17,7 +18,7 @@ use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Size};
 use ratatui::style::{Color, Modifier};
 use uefi::boot::{self, OpenProtocolAttributes, OpenProtocolParams, ScopedProtocol};
-use uefi::proto::console::gop::{BltOp, BltPixel, BltRegion, GraphicsOutput, Mode};
+use uefi::proto::console::gop::{BltOp, BltPixel, BltRegion, GraphicsOutput, Mode, PixelFormat};
 use uefi::system;
 
 static FONT_DATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/font.bin"));
@@ -36,6 +37,12 @@ const MIN_GRID: (usize, usize) = (80, 25);
 /// just outside kept a faint trace of the old content, e.g. a line under
 /// the cell the cursor left.
 const FLUSH_PAD: usize = 2;
+/// Blend tables kept (a screen rarely uses more fg/bg pairs than this).
+const BLEND_TABLES: usize = 16;
+
+fn key(p: BltPixel) -> u32 {
+    u32::from_le_bytes([p.blue, p.green, p.red, 0])
+}
 
 pub struct GopBackend {
     gop: ScopedProtocol<GraphicsOutput>,
@@ -51,10 +58,22 @@ pub struct GopBackend {
     origin: (usize, usize),
     /// Back buffer, `width * height` pixels.
     buffer: Vec<BltPixel>,
-    /// Coverage of one procedurally drawn cell.
-    scratch: Vec<u8>,
+    /// Procedurally drawn box/block characters, rendered once per char at
+    /// this cell size (a handful of distinct chars, so a linear search).
+    box_glyphs: Vec<(char, Vec<u8>)>,
+    /// Blend tables for recent fg/bg pairs: entry `a` is `fg` over `bg` at
+    /// coverage `a`, so blending a pixel is one lookup.
+    blend_tables: Vec<((u32, u32), [BltPixel; 256])>,
+    /// Next table to replace once `blend_tables` is full.
+    next_table: usize,
     /// Per cell row, the changed column range `start..end` (empty = clean).
     dirty: Vec<(u16, u16)>,
+    /// The whole screen (margins included) must be copied on the next flush.
+    dirty_all: bool,
+    /// The linear framebuffer and its stride in pixels, when its format is
+    /// BGR (the same layout as `BltPixel`): rows are copied straight into
+    /// it, skipping the firmware's `Blt`. `None` uses `Blt`.
+    framebuffer: Option<(*mut BltPixel, usize)>,
     cursor: Position,
 }
 
@@ -73,10 +92,9 @@ fn pixel((r, g, b): Rgb) -> BltPixel {
 
 /// `bg + (fg - bg) * a / 255`, per channel.
 fn blend(fg: BltPixel, bg: BltPixel, a: u8) -> BltPixel {
-    let mix = |f: u8, b: u8| {
-        let (f, b, a) = (i32::from(f), i32::from(b), i32::from(a));
-        (b + (f - b) * a / 255) as u8
-    };
+    // Unsigned and rounded: the division by a constant becomes a multiply.
+    let (a, na) = (u32::from(a), 255 - u32::from(a));
+    let mix = |f: u8, b: u8| ((u32::from(f) * a + u32::from(b) * na + 127) / 255) as u8;
     BltPixel::new(mix(fg.red, bg.red), mix(fg.green, bg.green), mix(fg.blue, bg.blue))
 }
 
@@ -132,6 +150,15 @@ impl GopBackend {
         let (cw, ch) = (usize::from(face.cell_w), usize::from(face.cell_h));
         let (cols, rows) = (width / cw, height / ch);
 
+        let info = gop.current_mode_info();
+        let framebuffer = if info.pixel_format() == PixelFormat::Bgr && info.stride() >= width {
+            let mut fb = gop.frame_buffer();
+            let (base, size) = (fb.as_mut_ptr(), fb.size());
+            (!base.is_null() && size >= info.stride() * height * 4).then(|| (base.cast::<BltPixel>(), info.stride()))
+        } else {
+            None
+        };
+
         // The firmware console draws its cursor through GOP; keep it hidden.
         let _ = system::with_stdout(|out| out.enable_cursor(false));
 
@@ -145,8 +172,12 @@ impl GopBackend {
             rows: rows as u16,
             origin: ((width - cols * cw) / 2, (height - rows * ch) / 2),
             buffer: vec![BltPixel::new(0, 0, 0); width * height],
-            scratch: vec![0; cw * ch],
+            box_glyphs: Vec::new(),
+            blend_tables: Vec::with_capacity(BLEND_TABLES),
+            next_table: 0,
             dirty: vec![(0, 0); rows],
+            dirty_all: true,
+            framebuffer,
             cursor: Position::ORIGIN,
         };
         backend.clear().ok()?;
@@ -162,16 +193,54 @@ impl GopBackend {
     }
 
     /// Blend `coverage` (`w` x `h`, row stride `w`) at pixel `x`, `y`.
+    /// Works on row slices so the inner loop has no bounds checks.
     fn blend_coverage(&mut self, x: usize, y: usize, w: usize, h: usize, coverage: &[u8], fg: BltPixel, bg: BltPixel) {
-        for gy in 0..h {
-            let row = (y + gy) * self.width + x;
-            for gx in 0..w {
-                let a = coverage[gy * w + gx];
+        if w == 0 {
+            return;
+        }
+        let table = self.blend_table(fg, bg);
+        let stride = self.width;
+        let rows = self.buffer[y * stride..].chunks_mut(stride).take(h);
+        for (row, src) in rows.zip(coverage.chunks_exact(w)) {
+            for (dst, &a) in row[x..x + w].iter_mut().zip(src) {
                 if a != 0 {
-                    self.buffer[row + gx] = if a == 255 { fg } else { blend(fg, bg, a) };
+                    *dst = self.blend_tables[table].1[usize::from(a)];
                 }
             }
         }
+    }
+
+    /// Index of the blend table for `fg` over `bg`, building it if needed.
+    fn blend_table(&mut self, fg: BltPixel, bg: BltPixel) -> usize {
+        let pair = (key(fg), key(bg));
+        if let Some(i) = self.blend_tables.iter().position(|(k, _)| *k == pair) {
+            return i;
+        }
+        let table = core::array::from_fn(|a| blend(fg, bg, a as u8));
+        if self.blend_tables.len() < BLEND_TABLES {
+            self.blend_tables.push((pair, table));
+            self.blend_tables.len() - 1
+        } else {
+            let i = self.next_table;
+            self.next_table = (i + 1) % BLEND_TABLES;
+            self.blend_tables[i] = (pair, table);
+            i
+        }
+    }
+
+    /// Index into `box_glyphs` of `ch`'s coverage, rendering it on first use.
+    /// `None` if `ch` isn't drawn procedurally.
+    fn box_glyph(&mut self, ch: char) -> Option<usize> {
+        if let Some(i) = self.box_glyphs.iter().position(|(c, _)| *c == ch) {
+            return Some(i);
+        }
+        let (cw, chh) = (usize::from(self.face.cell_w), usize::from(self.face.cell_h));
+        let mut coverage = vec![0; cw * chh];
+        if !boxdraw::render(ch, cw, chh, boxdraw::thickness(self.face.px), &mut coverage) {
+            return None;
+        }
+        self.box_glyphs.push((ch, coverage));
+        Some(self.box_glyphs.len() - 1)
     }
 
     fn draw_cell(&mut self, x: u16, y: u16, cell: &Cell) {
@@ -205,10 +274,12 @@ impl GopBackend {
             if cell.modifier.contains(Modifier::ITALIC) {
                 style |= font::ITALIC;
             }
-            if boxdraw::render(symbol, cw, ch, thick, &mut self.scratch) {
-                let scratch = core::mem::take(&mut self.scratch);
-                self.blend_coverage(px, py, cw, ch, &scratch, fg, bg);
-                self.scratch = scratch;
+            // Box drawing and block elements (U+2500-U+259F) are drawn by us.
+            let boxed = ('\u{2500}'..='\u{259F}').contains(&symbol).then(|| self.box_glyph(symbol)).flatten();
+            if let Some(i) = boxed {
+                let coverage = core::mem::take(&mut self.box_glyphs[i].1);
+                self.blend_coverage(px, py, cw, ch, &coverage, fg, bg);
+                self.box_glyphs[i].1 = coverage;
             } else if let Some(g) = face.glyph(symbol, style) {
                 self.blend_coverage(px + usize::from(g.x), py + usize::from(g.y), usize::from(g.w), usize::from(g.h), g.coverage, fg, bg);
             } else {
@@ -261,6 +332,16 @@ impl GopBackend {
         if w == 0 || h == 0 {
             return Ok(());
         }
+        if let Some((base, stride)) = self.framebuffer {
+            for row in y..y + h {
+                let src = &self.buffer[row * self.width + x..][..w];
+                // SAFETY: the framebuffer holds `stride * height` pixels of
+                // the current mode (checked in `new`), `x + w <= width <=
+                // stride` and `row < height`. The mode only changes on drop.
+                unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), base.add(row * stride + x), w) };
+            }
+            return Ok(());
+        }
         self.gop
             .blt(BltOp::BufferToVideo {
                 buffer: &self.buffer,
@@ -289,9 +370,11 @@ impl Backend for GopBackend {
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
+        let start = perf::now();
         for (x, y, cell) in content {
             self.draw_cell(x, y, cell);
         }
+        perf::record(Phase::BackendDraw, start);
         Ok(())
     }
 
@@ -317,8 +400,9 @@ impl Backend for GopBackend {
     fn clear(&mut self) -> Result<()> {
         let bg = pixel(theme::to_rgb(theme::current().background, Color::Reset));
         self.buffer.fill(bg);
-        self.dirty.fill((0, 0));
-        self.blit(0, 0, self.width, self.height)
+        // Copied on the next flush, together with the redraw that follows.
+        self.dirty_all = true;
+        Ok(())
     }
 
     fn clear_region(&mut self, clear_type: ClearType) -> Result<()> {
@@ -342,6 +426,13 @@ impl Backend for GopBackend {
     /// Copy changed rows to the screen. Consecutive dirty rows merge into
     /// one rectangle spanning their combined columns.
     fn flush(&mut self) -> Result<()> {
+        let start = perf::now();
+        if core::mem::take(&mut self.dirty_all) {
+            self.dirty.fill((0, 0));
+            self.blit(0, 0, self.width, self.height)?;
+            perf::record(Phase::Flush, start);
+            return Ok(());
+        }
         let mut row = 0;
         while row < self.dirty.len() {
             let (mut start, mut end) = self.dirty[row];
@@ -365,6 +456,7 @@ impl Backend for GopBackend {
             self.blit(x0, y0, x1 - x0, y1 - y0)?;
         }
         self.dirty.fill((0, 0));
+        perf::record(Phase::Flush, start);
         Ok(())
     }
 }

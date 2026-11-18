@@ -4,6 +4,7 @@ pub mod markdown;
 
 use crate::config::keyboard::KeyboardConfig;
 use crate::error::{Error, Result};
+use crate::perf::{self, Phase};
 use crate::file::backup::BackupManager;
 use crate::file::{file_name, manager};
 use crate::platform::{KeyEvent, Platform};
@@ -18,7 +19,6 @@ use alloc::vec;
 use alloc::vec::Vec;
 use buffer::TextBuffer;
 use cursor::Cursor;
-use ratatui::layout::{Constraint, Layout};
 use ratatui::Terminal;
 
 enum Mode {
@@ -64,7 +64,15 @@ pub struct Editor<P: Platform> {
     /// one full blink period after a key press.
     skip_tick: bool,
     running: bool,
+    /// Keys handled since the last backup check (see `run`).
+    keys_since_backup_check: u32,
 }
+
+/// Check for a due backup at least this often while typing without pause.
+const BACKUP_CHECK_KEYS: u32 = 64;
+/// Keys handled between two frames at most, so the screen still updates
+/// during a long burst.
+const MAX_KEYS_PER_FRAME: usize = 32;
 
 impl<P: Platform> Editor<P> {
     pub fn new(mut platform: P, backend: P::Backend) -> Result<Self> {
@@ -91,18 +99,46 @@ impl<P: Platform> Editor<P> {
             cursor_on: true,
             skip_tick: false,
             running: true,
+            keys_since_backup_check: BACKUP_CHECK_KEYS,
         })
     }
 
     pub fn run(&mut self) -> Result<()> {
         while self.running {
-            if let Err(err) = self.backups.check_and_backup(&mut self.platform, &self.buffer) {
-                self.fail(format!("Backup failed: {err}"));
+            // Reading the clock is slow on firmware, so check for a due
+            // backup while idle (each Tick) and every so many keys.
+            if self.keys_since_backup_check >= BACKUP_CHECK_KEYS {
+                self.keys_since_backup_check = 0;
+                let start = perf::now();
+                if let Err(err) = self.backups.check_and_backup(&mut self.platform, &self.buffer) {
+                    self.fail(format!("Backup failed: {err}"));
+                }
+                perf::record(Phase::Backup, start);
             }
+            let start = perf::now();
             self.draw()?;
+            perf::record(Phase::Frame, start);
             let key = self.platform.read_key()?;
+            self.keys_since_backup_check =
+                if key == KeyEvent::Tick { BACKUP_CHECK_KEYS } else { self.keys_since_backup_check + 1 };
+            let start = perf::now();
             self.handle_key(key);
+            perf::record(Phase::Key, start);
+            // Handle keys that arrived meanwhile (fast typing, key repeat)
+            // before drawing, so the screen catches up in one frame.
+            for _ in 0..MAX_KEYS_PER_FRAME {
+                if !self.running {
+                    break;
+                }
+                let Some(key) = self.platform.poll_key()? else { break };
+                self.keys_since_backup_check += 1;
+                let start = perf::now();
+                self.handle_key(key);
+                perf::record(Phase::Key, start);
+            }
         }
+        #[cfg(feature = "perf")]
+        let _ = self.platform.write_file(".nowwrite/perf.log", &perf::report());
         self.terminal.clear().map_err(Error::io)?;
         Ok(())
     }
@@ -137,10 +173,14 @@ impl<P: Platform> Editor<P> {
         let Self { terminal, buffer, view, mode, .. } = self;
         terminal
             .draw(|frame| {
-                let [main, status] =
-                    Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
+                let start = perf::now();
+                let (main, status) = crate::ui::split_last_row(frame.area());
+                let t = perf::now();
                 let editor_cursor = view.render(frame, main, buffer);
+                perf::record(Phase::View, t);
+                let t = perf::now();
                 status_bar::render(frame, status, buffer, &info);
+                perf::record(Phase::StatusBar, t);
                 let cursor = match mode {
                     Mode::Editing => editor_cursor,
                     Mode::Files(modal) => modal.render(frame),
@@ -162,6 +202,7 @@ impl<P: Platform> Editor<P> {
                     }
                 };
 
+                perf::record(Phase::Render, start);
                 let Some(position) = cursor else { return };
                 if !P::SOFTWARE_CURSOR {
                     frame.set_cursor_position(position);

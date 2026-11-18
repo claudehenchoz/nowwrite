@@ -4,10 +4,9 @@ use crate::platform::BatteryStatus;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 /// Extra state shown on the right of the status bar.
@@ -68,10 +67,11 @@ pub fn render(frame: &mut Frame, area: Rect, buffer: &TextBuffer, info: &StatusI
     let left = if info.message.is_none() && fits { full_left } else { short_left };
 
     let right_width = (right_len as u16).min(area.width);
-    let [left_area, right_area] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(right_width)]).areas(area);
+    let left_width = area.width - right_width;
 
-    let bar = super::bar();
-    frame.render_widget(Paragraph::new(Line::from(left)).style(bar), left_area);
-    frame.render_widget(Paragraph::new(right).style(bar), right_area);
+    // Draw straight into the buffer: no Layout solver, no Paragraph.
+    let buf = frame.buffer_mut();
+    buf.set_style(area, super::bar());
+    buf.set_line(area.x, area.y, &Line::from(left), left_width);
+    buf.set_line(area.x + left_width, area.y, &right, right_width);
 }

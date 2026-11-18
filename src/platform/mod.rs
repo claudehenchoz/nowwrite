@@ -133,6 +133,12 @@ pub trait Platform: Sized {
     fn init() -> Result<(Self, Self::Backend)>;
     fn read_key(&mut self) -> Result<KeyEvent>;
 
+    /// A key that is already waiting, without blocking (never `Tick`).
+    /// Lets the editor handle a burst of keys before drawing once.
+    fn poll_key(&mut self) -> Result<Option<KeyEvent>> {
+        Ok(None)
+    }
+
     /// List `.md` files and directories in `dir`, sorted by name.
     fn list_files(&mut self, dir: &str) -> Result<Vec<FileInfo>>;
     fn read_file(&mut self, path: &str) -> Result<String>;

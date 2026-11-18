@@ -3,7 +3,7 @@ pub mod modal;
 pub mod status_bar;
 pub mod theme;
 
-use ratatui::layout::{Constraint, Flex, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType};
@@ -92,13 +92,46 @@ pub fn dialog_block<'a>(title: &'a str, hint: &'a str) -> Block<'a> {
         .title_bottom(Line::from(hint).centered().style(Style::new().fg(t.dialog.fg)))
 }
 
-/// A `width` x `height` rect centered in `area` (clamped to fit).
+/// A `width` x `height` rect centered in `area` (clamped to fit). Plain
+/// arithmetic: ratatui's `Layout` runs a constraint solver on every call
+/// (its cache needs `std`), which is slow on UEFI.
 pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
-    let [row] = Layout::vertical([Constraint::Length(height.min(area.height))])
-        .flex(Flex::Center)
-        .areas(area);
-    let [rect] = Layout::horizontal([Constraint::Length(width.min(area.width))])
-        .flex(Flex::Center)
-        .areas(row);
-    rect
+    let (width, height) = (width.min(area.width), height.min(area.height));
+    // Odd leftovers put the extra cell before the box, like ratatui.
+    let offset = |extra: u16| extra.div_ceil(2);
+    Rect::new(area.x + offset(area.width - width), area.y + offset(area.height - height), width, height)
+}
+
+/// `area` split into everything but the last row, and the last row.
+pub fn split_last_row(area: Rect) -> (Rect, Rect) {
+    let top = Rect { height: area.height.saturating_sub(1), ..area };
+    let bottom = Rect { y: area.y + top.height, height: area.height - top.height, ..area };
+    (top, bottom)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::layout::{Constraint, Flex, Layout};
+
+    #[test]
+    fn centered_matches_ratatui_layout() {
+        for (aw, ah) in [(80, 25), (91, 25), (101, 25), (79, 24), (20, 5)] {
+            let area = Rect::new(0, 0, aw, ah);
+            for w in [1, 44, 50, 54, 60, 66, 100, 120] {
+                for h in [1, 6, 7, 9, 16, 20, 30] {
+                    let [row] = Layout::vertical([Constraint::Length(h.min(ah))]).flex(Flex::Center).areas(area);
+                    let [rect] = Layout::horizontal([Constraint::Length(w.min(aw))]).flex(Flex::Center).areas(row);
+                    assert_eq!(centered(area, w, h), rect, "area {aw}x{ah} box {w}x{h}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn split_last_row_matches_ratatui_layout() {
+        let area = Rect::new(0, 0, 91, 25);
+        let [main, status] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
+        assert_eq!(split_last_row(area), (main, status));
+    }
 }

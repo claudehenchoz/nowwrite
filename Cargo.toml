@@ -21,7 +21,8 @@ required-features = ["uefi"]
 # default-features = false keeps ratatui no_std (+ alloc) for the UEFI build.
 ratatui = { version = "0.30", default-features = false }
 chrono = { version = "0.4", optional = true, default-features = false, features = ["clock"] }
-uefi = { version = "0.41", optional = true, features = ["alloc", "global_allocator", "panic_handler"] }
+# The global allocator is our own (heap.rs) over uefi::allocator::Allocator.
+uefi = { version = "0.41", optional = true, features = ["alloc", "panic_handler"] }
 
 [features]
 default = ["terminal"]
@@ -29,9 +30,11 @@ default = ["terminal"]
 terminal = ["ratatui/crossterm", "dep:chrono"]
 # Standalone UEFI application (build with --target x86_64-unknown-uefi).
 uefi = ["dep:uefi"]
+# Time the main loop and write .nowwrite/perf.log on exit (for profiling).
+perf = []
 
 [profile.release]
-opt-level = "z"
+opt-level = 3
 lto = true
 codegen-units = 1
 

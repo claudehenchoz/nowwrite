@@ -72,6 +72,28 @@ impl UefiInput {
     }
 }
 
+impl UefiInput {
+    /// A key that is already waiting, without blocking.
+    pub fn poll_key(&mut self) -> Result<Option<KeyEvent>> {
+        loop {
+            let (key, shift_state) = if let Some(input) = self.input_ex.as_mut() {
+                match input.read_key().map_err(err)? {
+                    Some(data) => (data.key, data.key_state.key_shift_state.map_or(0, |s| s.bits())),
+                    None => return Ok(None),
+                }
+            } else {
+                match system::with_stdin(|stdin| stdin.read_key()).map_err(err)? {
+                    Some(key) => (key, 0),
+                    None => return Ok(None),
+                }
+            };
+            if let Some(mapped) = map_key(key, shift_state) {
+                return Ok(Some(mapped));
+            }
+        }
+    }
+}
+
 impl Drop for UefiInput {
     fn drop(&mut self) {
         let _ = boot::set_timer(&self.timer, TimerTrigger::Cancel);

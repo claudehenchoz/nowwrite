@@ -30,6 +30,12 @@ const SWITCH_BELOW: (usize, usize) = (1024, 768);
 const MAX_RESOLUTION: (usize, usize) = (1920, 1200);
 /// The font size is the largest that still gives this many cells.
 const MIN_GRID: (usize, usize) = (80, 25);
+/// Pixels of unchanged content sent around each dirty rectangle. Viewers
+/// that scale the screen with filtering (QEMU's window under HiDPI or
+/// zoom-to-fit) repaint only the changed scanlines, so the filtered row
+/// just outside kept a faint trace of the old content, e.g. a line under
+/// the cell the cursor left.
+const FLUSH_PAD: usize = 2;
 
 pub struct GopBackend {
     gop: ScopedProtocol<GraphicsOutput>,
@@ -352,6 +358,10 @@ impl Backend for GopBackend {
             }
             let (x0, y0) = self.cell_origin(start, first as u16, true);
             let (x1, y1) = self.cell_origin(end, row as u16, true);
+            // Pad so a scaled viewer (e.g. QEMU's window under display
+            // scaling) also redraws the filtered pixels just outside.
+            let (x0, y0) = (x0.saturating_sub(FLUSH_PAD), y0.saturating_sub(FLUSH_PAD));
+            let (x1, y1) = ((x1 + FLUSH_PAD).min(self.width), (y1 + FLUSH_PAD).min(self.height));
             self.blit(x0, y0, x1 - x0, y1 - y0)?;
         }
         self.dirty.fill((0, 0));

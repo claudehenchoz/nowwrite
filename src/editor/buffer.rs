@@ -31,6 +31,12 @@ impl Default for TextBuffer {
     }
 }
 
+/// Characters that make up a word for word movement and bold/italic
+/// toggling (so "don't" and "well-known" count as one word).
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '\'' || c == '-'
+}
+
 /// Byte offset of char index `col` in `line` (clamped to the end).
 fn byte_idx(line: &str, col: usize) -> usize {
     line.char_indices().nth(col).map_or(line.len(), |(i, _)| i)
@@ -280,6 +286,44 @@ impl TextBuffer {
         self.merge_open = false;
     }
 
+    /// Start of the previous word (Ctrl+Left): skips spaces and punctuation
+    /// (including markdown markers) to the left, then the word itself. At the
+    /// start of a line, moves to the end of the previous line.
+    pub fn word_left(&self) -> Cursor {
+        let Cursor { line, column } = self.cursor;
+        if column == 0 {
+            return if line > 0 { Cursor::new_at(line - 1, self.line_len(line - 1)) } else { self.cursor };
+        }
+        let chars: Vec<char> = self.lines[line].chars().collect();
+        let mut col = column.min(chars.len());
+        while col > 0 && !is_word_char(chars[col - 1]) {
+            col -= 1;
+        }
+        while col > 0 && is_word_char(chars[col - 1]) {
+            col -= 1;
+        }
+        Cursor::new_at(line, col)
+    }
+
+    /// Start of the next word (Ctrl+Right): skips the rest of the current
+    /// word, then spaces and punctuation. At the end of a line, moves to the
+    /// start of the next line.
+    pub fn word_right(&self) -> Cursor {
+        let Cursor { line, column } = self.cursor;
+        let chars: Vec<char> = self.lines[line].chars().collect();
+        if column >= chars.len() {
+            return if line + 1 < self.lines.len() { Cursor::new_at(line + 1, 0) } else { self.cursor };
+        }
+        let mut col = column;
+        while col < chars.len() && is_word_char(chars[col]) {
+            col += 1;
+        }
+        while col < chars.len() && !is_word_char(chars[col]) {
+            col += 1;
+        }
+        Cursor::new_at(line, col)
+    }
+
     fn stars_before(&self, pos: Cursor) -> usize {
         let line: Vec<char> = self.lines[pos.line].chars().collect();
         line[..pos.column.min(line.len())].iter().rev().take_while(|&&c| c == '*').count()
@@ -332,7 +376,7 @@ impl TextBuffer {
     fn word_at_cursor(&self) -> Option<(Cursor, Cursor)> {
         let line: Vec<char> = self.lines[self.cursor.line].chars().collect();
         let col = self.cursor.column;
-        let is_word = |c: char| c.is_alphanumeric() || c == '\'' || c == '-';
+        let is_word = is_word_char;
         let touches_word = (col < line.len() && is_word(line[col]))
             || (col > 0 && is_word(line[col - 1]));
         if !touches_word {
@@ -557,6 +601,24 @@ mod tests {
         buf.undo();
         buf.undo();
         assert_eq!(buf.to_text(), "one two three");
+    }
+
+    #[test]
+    fn word_movement() {
+        let mut buf = TextBuffer::from_string("Say **don't** go, ok\nnext line");
+        let c = Cursor::new_at;
+        // Word starts skip markers and punctuation; the end of the line, then
+        // the start of the next line, are stops too.
+        for expected in [c(0, 6), c(0, 14), c(0, 18), c(0, 20), c(1, 0), c(1, 5)] {
+            buf.move_cursor(buf.word_right());
+            assert_eq!(buf.cursor(), expected);
+        }
+        for expected in [c(1, 0), c(0, 20), c(0, 18), c(0, 14), c(0, 6), c(0, 0)] {
+            buf.move_cursor(buf.word_left());
+            assert_eq!(buf.cursor(), expected);
+        }
+        // Already at the start of the document.
+        assert_eq!(buf.word_left(), c(0, 0));
     }
 
     #[test]

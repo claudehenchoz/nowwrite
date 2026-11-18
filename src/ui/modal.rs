@@ -238,6 +238,7 @@ pub fn render_help(frame: &mut Frame, layout: Option<&str>) {
         Line::from(" Ctrl+K  F5   Keyboard layout      Ctrl+I  Italic on/off"),
         Line::from(" Ctrl+Q  F10  Quit                 Shift+Arrows  Select"),
         Line::from(" F1           This help            Esc     Close a box"),
+        Line::from(" Ctrl+Left/Right  Move by word (add Shift to select)"),
         Line::from(""),
         Line::from(" Use the F-keys if your computer ignores Ctrl shortcuts."),
         Line::from(""),

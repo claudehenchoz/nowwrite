@@ -65,7 +65,8 @@ sudo ./scripts/create-boot-drive.sh /dev/sdX NOWWRITE
 |-----------------|-------------|--------|
 | F1 | | Help: every shortcut on one screen |
 | Arrow keys, Home/End, PgUp/PgDn | | Move the cursor (Up/Down/Home/End follow wrapped lines on screen) |
-| Shift+Arrows, Shift+Home/End | | Select text |
+| Ctrl+Left / Ctrl+Right | | Move to the previous / next word |
+| Shift+Arrows, Shift+Home/End, Ctrl+Shift+Left/Right | | Select text |
 | Ctrl+S | F2 | Save (creates a backup first; asks for a name the first time) |
 | Ctrl+L | F3 | Open a document |
 | Ctrl+N | F4 | New document (asks for a name) |

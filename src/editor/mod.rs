@@ -301,6 +301,8 @@ impl<P: Platform> Editor<P> {
                     | KeyEvent::ShiftRight
                     | KeyEvent::ShiftHome
                     | KeyEvent::ShiftEnd
+                    | KeyEvent::CtrlShiftLeft
+                    | KeyEvent::CtrlShiftRight
             );
             if selecting {
                 self.buffer.move_cursor_with_selection(target);
@@ -385,6 +387,8 @@ impl<P: Platform> Editor<P> {
                     cursor
                 }
             }
+            KeyEvent::CtrlLeft | KeyEvent::CtrlShiftLeft => self.buffer.word_left(),
+            KeyEvent::CtrlRight | KeyEvent::CtrlShiftRight => self.buffer.word_right(),
             KeyEvent::Home | KeyEvent::ShiftHome => self.view.row_edge(&self.buffer, false),
             KeyEvent::End | KeyEvent::ShiftEnd => self.view.row_edge(&self.buffer, true),
             _ => return None,

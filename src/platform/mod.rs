@@ -45,6 +45,12 @@ pub enum KeyEvent {
     ShiftRight,
     ShiftHome,
     ShiftEnd,
+    /// Move by word (Ctrl+Left / Ctrl+Right).
+    CtrlLeft,
+    CtrlRight,
+    /// Extend the selection by word (Ctrl+Shift+Left / Ctrl+Shift+Right).
+    CtrlShiftLeft,
+    CtrlShiftRight,
     /// The screen size changed; nothing to do except redraw.
     Resize,
     /// No key arrived within the platform's tick interval. Drives the

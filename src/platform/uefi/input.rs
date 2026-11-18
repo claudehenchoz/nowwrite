@@ -124,6 +124,10 @@ fn map_key(key: Key, shift_state: u32) -> Option<KeyEvent> {
             }
         }
         Key::Special(scan) => Some(match scan {
+            ScanCode::LEFT if ctrl && shift => KeyEvent::CtrlShiftLeft,
+            ScanCode::RIGHT if ctrl && shift => KeyEvent::CtrlShiftRight,
+            ScanCode::LEFT if ctrl => KeyEvent::CtrlLeft,
+            ScanCode::RIGHT if ctrl => KeyEvent::CtrlRight,
             ScanCode::UP if shift => KeyEvent::ShiftUp,
             ScanCode::DOWN if shift => KeyEvent::ShiftDown,
             ScanCode::LEFT if shift => KeyEvent::ShiftLeft,
